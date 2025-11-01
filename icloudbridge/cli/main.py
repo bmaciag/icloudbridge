@@ -183,23 +183,16 @@ notes_app = typer.Typer(help="Manage notes synchronization")
 app.add_typer(notes_app, name="notes")
 
 
-@notes_app.command("sync", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@notes_app.command("sync")
 def notes_sync(
     ctx: typer.Context,
-    folder: Optional[str] = typer.Option(None, "--folder", "-f"),
-    dry_run: bool = typer.Option(False, "--dry-run", "-n"),
-    skip_deletions: bool = typer.Option(False, "--skip-deletions"),
-    deletion_threshold: str = typer.Option("5", "--deletion-threshold"),
+    folder: Optional[str] = typer.Option(None, "--folder", "-f", help="Sync specific folder only"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Preview changes without applying them"),
+    skip_deletions: bool = typer.Option(False, "--skip-deletions", help="Skip all deletion operations"),
+    deletion_threshold: int = typer.Option(5, "--deletion-threshold", help="Max deletions before confirmation (use -1 to disable)"),
 ) -> None:
     """Synchronize notes between Apple Notes and markdown files."""
     cfg = ctx.obj["config"]
-
-    # Convert deletion_threshold to int
-    try:
-        deletion_threshold_int = int(deletion_threshold)
-    except ValueError as e:
-        console.print(f"[red]Invalid deletion threshold: {deletion_threshold}[/red]")
-        raise typer.Exit(1) from e
 
     # Check if notes sync is enabled
     if not cfg.notes.enabled:
@@ -255,7 +248,7 @@ def notes_sync(
                     folder_name,
                     dry_run=dry_run,
                     skip_deletions=skip_deletions,
-                    deletion_threshold=deletion_threshold_int,
+                    deletion_threshold=deletion_threshold,
                 )
 
                 # Aggregate stats
