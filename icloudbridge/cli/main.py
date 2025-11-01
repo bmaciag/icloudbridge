@@ -3,6 +3,7 @@
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 import typer
 from rich.console import Console
@@ -36,7 +37,7 @@ def setup_logging(log_level: str) -> None:
 @app.callback()
 def main(
     ctx: typer.Context,
-    config_file: Path | None = typer.Option(
+    config_file: Optional[Path] = typer.Option(
         None,
         "--config",
         "-c",
