@@ -192,8 +192,8 @@ class MarkdownAdapter:
 
 **Purpose**: Convert between HTML and Markdown
 
-**Libraries** (reuse TaskBridge's approach):
-- `markdownify` - HTML → Markdown
+**Libraries** (improved over TaskBridge):
+- `html-to-markdown` - HTML → Markdown (60-80× faster than markdownify, better docs, Rust-powered)
 - `markdown-it-py` - Markdown → HTML (TaskBridge uses markdown2, but markdown-it-py is already in deps)
 
 **Functions**:
@@ -201,9 +201,10 @@ class MarkdownAdapter:
 ```python
 def html_to_markdown(html: str) -> str:
     """Convert HTML from Apple Notes to Markdown"""
-    # Use markdownify (same as TaskBridge)
+    # Use html-to-markdown (better than markdownify: 60-80× faster, better docs)
     # Strip Apple's h1 title (first line)
     # Handle image tags
+    # Configure heading_style='atx', newline_style='spaces'
 
 def markdown_to_html(markdown: str, attachments: list[Attachment] = None) -> str:
     """Convert Markdown to HTML for Apple Notes"""
