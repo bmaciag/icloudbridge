@@ -183,24 +183,23 @@ notes_app = typer.Typer(help="Manage notes synchronization")
 app.add_typer(notes_app, name="notes")
 
 
-@notes_app.command("sync")
+@notes_app.command("sync", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def notes_sync(
     ctx: typer.Context,
-    folder: Optional[str] = typer.Option(
-        None,
-        "--folder",
-        "-f",
-        help="Specific folder to sync (syncs all if not specified)",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        "-n",
-        help="Preview changes without applying them",
-    ),
+    folder: Optional[str] = typer.Option(None, "--folder", "-f"),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n"),
+    skip_deletions: bool = typer.Option(False, "--skip-deletions"),
+    deletion_threshold: str = typer.Option("5", "--deletion-threshold"),
 ) -> None:
     """Synchronize notes between Apple Notes and markdown files."""
     cfg = ctx.obj["config"]
+
+    # Convert deletion_threshold to int
+    try:
+        deletion_threshold_int = int(deletion_threshold)
+    except ValueError as e:
+        console.print(f"[red]Invalid deletion threshold: {deletion_threshold}[/red]")
+        raise typer.Exit(1) from e
 
     # Check if notes sync is enabled
     if not cfg.notes.enabled:
@@ -215,8 +214,7 @@ def notes_sync(
         raise typer.Exit(1)
 
     if dry_run:
-        console.print("[yellow]Dry run mode is not yet implemented[/yellow]")
-        console.print("[dim]For now, running actual sync...[/dim]\n")
+        console.print("[cyan]DRY RUN MODE: Previewing changes only[/cyan]\n")
 
     async def run_sync():
         # Initialize sync engine
@@ -245,19 +243,46 @@ def notes_sync(
             "deleted_local": 0,
             "deleted_remote": 0,
             "unchanged": 0,
+            "would_delete_local": 0,
+            "would_delete_remote": 0,
         }
 
         for folder_name in folders_to_sync:
             try:
                 console.print(f"[bold]Syncing folder:[/bold] {folder_name}")
-                stats = await sync_engine.sync_folder(folder_name, folder_name)
+                stats = await sync_engine.sync_folder(
+                    folder_name,
+                    folder_name,
+                    dry_run=dry_run,
+                    skip_deletions=skip_deletions,
+                    deletion_threshold=deletion_threshold_int,
+                )
 
                 # Aggregate stats
                 for key in total_stats:
                     total_stats[key] += stats[key]
 
                 # Show folder stats
-                if any(stats[k] > 0 for k in stats if k != "unchanged"):
+                if dry_run:
+                    # Show dry-run preview
+                    if any(stats[k] > 0 for k in stats if k not in ["unchanged", "would_delete_local", "would_delete_remote"]) or stats["would_delete_local"] > 0 or stats["would_delete_remote"] > 0:
+                        console.print(
+                            f"  [yellow]Preview:[/yellow] "
+                            f"{stats['created_remote']} would create, "
+                            f"{stats['updated_remote']} would update, "
+                            f"{stats['would_delete_remote']} would delete "
+                            f"(remote)"
+                        )
+                        console.print(
+                            f"  [yellow]Preview:[/yellow] "
+                            f"{stats['created_local']} would create, "
+                            f"{stats['updated_local']} would update, "
+                            f"{stats['would_delete_local']} would delete "
+                            f"(local)"
+                        )
+                    else:
+                        console.print(f"  [dim]No changes needed ({stats['unchanged']} unchanged)[/dim]")
+                elif any(stats[k] > 0 for k in stats if k != "unchanged"):
                     console.print(
                         f"  [green]✓[/green] "
                         f"{stats['created_remote']} created, "
@@ -275,23 +300,46 @@ def notes_sync(
                 else:
                     console.print(f"  [dim]No changes needed ({stats['unchanged']} unchanged)[/dim]")
 
+            except RuntimeError as e:
+                # Check if it's a deletion threshold error
+                if "Deletion threshold exceeded" in str(e):
+                    console.print(f"  [red]✗ {e}[/red]")
+                    console.print("  [yellow]Use --deletion-threshold -1 to bypass this check[/yellow]")
+                    raise typer.Exit(1) from e
+                else:
+                    console.print(f"  [red]✗ Failed: {e}[/red]")
+                    logging.exception(f"Failed to sync folder {folder_name}")
             except Exception as e:
                 console.print(f"  [red]✗ Failed: {e}[/red]")
                 logging.exception(f"Failed to sync folder {folder_name}")
 
         # Show summary
-        console.print("\n[bold]Sync Summary[/bold]")
+        if dry_run:
+            console.print("\n[bold]Dry Run Summary (Preview Only)[/bold]")
+        else:
+            console.print("\n[bold]Sync Summary[/bold]")
+
         table = Table()
         table.add_column("Operation", style="cyan")
         table.add_column("Local (Apple Notes)", style="green", justify="right")
         table.add_column("Remote (Markdown)", style="blue", justify="right")
 
-        table.add_row("Created", str(total_stats["created_local"]), str(total_stats["created_remote"]))
-        table.add_row("Updated", str(total_stats["updated_local"]), str(total_stats["updated_remote"]))
-        table.add_row("Deleted", str(total_stats["deleted_local"]), str(total_stats["deleted_remote"]))
-        table.add_row("Unchanged", str(total_stats["unchanged"]), str(total_stats["unchanged"]))
+        if dry_run:
+            table.add_row("Would Create", str(total_stats["created_local"]), str(total_stats["created_remote"]))
+            table.add_row("Would Update", str(total_stats["updated_local"]), str(total_stats["updated_remote"]))
+            table.add_row("Would Delete", str(total_stats["would_delete_local"]), str(total_stats["would_delete_remote"]))
+            table.add_row("Unchanged", str(total_stats["unchanged"]), str(total_stats["unchanged"]))
+        else:
+            table.add_row("Created", str(total_stats["created_local"]), str(total_stats["created_remote"]))
+            table.add_row("Updated", str(total_stats["updated_local"]), str(total_stats["updated_remote"]))
+            table.add_row("Deleted", str(total_stats["deleted_local"]), str(total_stats["deleted_remote"]))
+            table.add_row("Unchanged", str(total_stats["unchanged"]), str(total_stats["unchanged"]))
 
         console.print(table)
+
+        if dry_run:
+            console.print("\n[yellow]This was a dry run. No changes were made.[/yellow]")
+            console.print("[dim]Run without --dry-run to apply these changes.[/dim]")
 
     # Run async sync
     try:

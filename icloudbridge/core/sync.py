@@ -66,6 +66,9 @@ class NotesSyncEngine:
         self,
         folder_name: str,
         markdown_subfolder: str | None = None,
+        dry_run: bool = False,
+        skip_deletions: bool = False,
+        deletion_threshold: int = 5,
     ) -> dict[str, int]:
         """
         Synchronize a single Apple Notes folder with markdown files.
@@ -76,6 +79,10 @@ class NotesSyncEngine:
             folder_name: Name of the Apple Notes folder to sync
             markdown_subfolder: Optional subfolder in markdown destination
                                (if None, uses base folder)
+            dry_run: If True, preview changes without applying them
+            skip_deletions: If True, skip all deletion operations
+            deletion_threshold: Prompt user if deletions exceed this count
+                               (-1 to disable threshold, default: 5)
 
         Returns:
             Dictionary with sync statistics:
@@ -86,11 +93,13 @@ class NotesSyncEngine:
             - deleted_local: Notes deleted from Apple Notes
             - deleted_remote: Markdown files deleted
             - unchanged: Notes that didn't need sync
+            - would_delete_local: (dry_run only) Notes that would be deleted
+            - would_delete_remote: (dry_run only) Markdown files that would be deleted
 
         Raises:
             RuntimeError: If sync fails
         """
-        logger.info(f"Starting sync for folder: {folder_name}")
+        logger.info(f"Starting sync for folder: {folder_name}" + (" (DRY RUN)" if dry_run else ""))
         stats = {
             "created_local": 0,
             "created_remote": 0,
@@ -99,6 +108,8 @@ class NotesSyncEngine:
             "deleted_local": 0,
             "deleted_remote": 0,
             "unchanged": 0,
+            "would_delete_local": 0,  # For dry_run
+            "would_delete_remote": 0,  # For dry_run
         }
 
         try:
@@ -132,12 +143,43 @@ class NotesSyncEngine:
             all_mappings = await self.db.get_all_mappings()
             mappings_by_uuid = {m["local_uuid"]: m for m in all_mappings}
 
-            # Step 4: Determine what needs to be synced
+            # Step 4: Check deletion threshold (if not disabled and not skipping deletions)
+            if deletion_threshold > 0 and not skip_deletions and not dry_run:
+                # Pre-scan to count potential deletions
+                deletion_count = 0
+
+                # Count notes that would be deleted (remote file missing)
+                for uuid in local_notes_by_uuid:
+                    mapping = mappings_by_uuid.get(uuid)
+                    if mapping:
+                        remote_path_str = str(mapping["remote_path"])
+                        if remote_path_str not in remote_notes_by_path:
+                            deletion_count += 1
+
+                # Count markdown files that would be deleted (local note missing)
+                for remote_path_str in remote_notes_by_path:
+                    mapping = await self.db.get_mapping_by_remote_path(remote_path_str)
+                    if mapping and mapping["local_uuid"] not in local_notes_by_uuid:
+                        deletion_count += 1
+
+                # If threshold exceeded, prompt user
+                if deletion_count > deletion_threshold:
+                    logger.warning(
+                        f"About to delete {deletion_count} notes (threshold: {deletion_threshold})"
+                    )
+                    # Note: In CLI mode, this will be handled by the CLI layer
+                    # For now, we'll raise an exception that the CLI can catch
+                    raise RuntimeError(
+                        f"Deletion threshold exceeded: {deletion_count} deletions pending "
+                        f"(threshold: {deletion_threshold}). Use --deletion-threshold -1 to disable."
+                    )
+
+            # Step 5: Determine what needs to be synced
             # Track which notes/files we've processed
             processed_local_uuids = set()
             processed_remote_paths = set()
 
-            # 4a. Process notes that exist in Apple Notes
+            # 5a. Process notes that exist in Apple Notes
             for uuid, apple_note in local_notes_by_uuid.items():
                 mapping = mappings_by_uuid.get(uuid)
 
@@ -150,10 +192,18 @@ class NotesSyncEngine:
                     # Check if remote file still exists
                     if str(remote_path) not in remote_notes_by_path:
                         # Remote file was deleted - delete from Apple Notes
-                        logger.info(f"Remote file deleted, deleting note: {apple_note.name}")
-                        await self.notes_adapter.delete_note(folder_name, apple_note.name)
-                        await self.db.delete_mapping(uuid)
-                        stats["deleted_local"] += 1
+                        if skip_deletions:
+                            logger.info(f"Remote file deleted, skipping deletion (--skip-deletions): {apple_note.name}")
+                            continue
+
+                        if dry_run:
+                            logger.info(f"[DRY RUN] Would delete note: {apple_note.name}")
+                            stats["would_delete_local"] += 1
+                        else:
+                            logger.info(f"Remote file deleted, deleting note: {apple_note.name}")
+                            await self.notes_adapter.delete_note(folder_name, apple_note.name)
+                            await self.db.delete_mapping(uuid)
+                            stats["deleted_local"] += 1
                         continue
 
                     # Both exist - check which is newer
@@ -168,58 +218,71 @@ class NotesSyncEngine:
                         # Both changed since last sync - use last-write-wins
                         if local_modified > remote_modified:
                             # Local is newer - push to remote
-                            logger.info(
-                                f"Conflict (local wins): {apple_note.name} "
-                                f"(local: {local_modified}, remote: {remote_modified})"
-                            )
-                            await self._push_to_remote(
-                                apple_note, remote_path, markdown_subfolder
-                            )
+                            if dry_run:
+                                logger.info(f"[DRY RUN] Would update remote (conflict, local wins): {apple_note.name}")
+                            else:
+                                logger.info(
+                                    f"Conflict (local wins): {apple_note.name} "
+                                    f"(local: {local_modified}, remote: {remote_modified})"
+                                )
+                                await self._push_to_remote(
+                                    apple_note, remote_path, markdown_subfolder
+                                )
                             stats["updated_remote"] += 1
                         else:
                             # Remote is newer - pull from remote
-                            logger.info(
-                                f"Conflict (remote wins): {apple_note.name} "
-                                f"(local: {local_modified}, remote: {remote_modified})"
-                            )
-                            await self._pull_from_remote(
-                                md_note, folder_name, apple_note.name
-                            )
+                            if dry_run:
+                                logger.info(f"[DRY RUN] Would update local (conflict, remote wins): {apple_note.name}")
+                            else:
+                                logger.info(
+                                    f"Conflict (remote wins): {apple_note.name} "
+                                    f"(local: {local_modified}, remote: {remote_modified})"
+                                )
+                                await self._pull_from_remote(
+                                    md_note, folder_name, apple_note.name
+                                )
                             stats["updated_local"] += 1
 
                         # Update mapping with current timestamp
-                        await self.db.upsert_mapping(
-                            local_uuid=uuid,
-                            local_name=apple_note.name,
-                            local_folder_uuid="",  # We don't track folder UUID yet
-                            remote_path=remote_path,
-                            timestamp=datetime.now().timestamp(),
-                        )
+                        if not dry_run:
+                            await self.db.upsert_mapping(
+                                local_uuid=uuid,
+                                local_name=apple_note.name,
+                                local_folder_uuid="",  # We don't track folder UUID yet
+                                remote_path=remote_path,
+                                timestamp=datetime.now().timestamp(),
+                            )
 
                     elif local_modified > last_sync:
                         # Only local changed - push to remote
-                        logger.info(f"Local changed: {apple_note.name}")
-                        await self._push_to_remote(apple_note, remote_path, markdown_subfolder)
-                        await self.db.upsert_mapping(
-                            local_uuid=uuid,
-                            local_name=apple_note.name,
-                            local_folder_uuid="",
-                            remote_path=remote_path,
-                            timestamp=datetime.now().timestamp(),
-                        )
+                        if dry_run:
+                            logger.info(f"[DRY RUN] Would update remote: {apple_note.name}")
+                        else:
+                            logger.info(f"Local changed: {apple_note.name}")
+                            await self._push_to_remote(apple_note, remote_path, markdown_subfolder)
+                            await self.db.upsert_mapping(
+                                local_uuid=uuid,
+                                local_name=apple_note.name,
+                                local_folder_uuid="",
+                                remote_path=remote_path,
+                                timestamp=datetime.now().timestamp(),
+                            )
                         stats["updated_remote"] += 1
 
                     elif remote_modified > last_sync:
                         # Only remote changed - pull from remote
-                        logger.info(f"Remote changed: {apple_note.name}")
-                        await self._pull_from_remote(md_note, folder_name, apple_note.name)
-                        await self.db.upsert_mapping(
-                            local_uuid=uuid,
-                            local_name=apple_note.name,
-                            local_folder_uuid="",
-                            remote_path=remote_path,
-                            timestamp=datetime.now().timestamp(),
-                        )
+                        if dry_run:
+                            logger.info(f"[DRY RUN] Would update local: {apple_note.name}")
+                        else:
+                            logger.info(f"Remote changed: {apple_note.name}")
+                            await self._pull_from_remote(md_note, folder_name, apple_note.name)
+                            await self.db.upsert_mapping(
+                                local_uuid=uuid,
+                                local_name=apple_note.name,
+                                local_folder_uuid="",
+                                remote_path=remote_path,
+                                timestamp=datetime.now().timestamp(),
+                            )
                         stats["updated_local"] += 1
 
                     else:
@@ -229,17 +292,22 @@ class NotesSyncEngine:
 
                 else:
                     # Note is not mapped - it's new, create on remote
-                    logger.info(f"New local note: {apple_note.name}")
-                    remote_path = await self._push_to_remote(
-                        apple_note, None, markdown_subfolder
-                    )
-                    await self.db.upsert_mapping(
-                        local_uuid=uuid,
-                        local_name=apple_note.name,
-                        local_folder_uuid="",
-                        remote_path=remote_path,
-                        timestamp=datetime.now().timestamp(),
-                    )
+                    if dry_run:
+                        logger.info(f"[DRY RUN] Would create remote: {apple_note.name}")
+                        # Create fake path for dry run tracking
+                        remote_path = Path(f"{apple_note.name}.md")
+                    else:
+                        logger.info(f"New local note: {apple_note.name}")
+                        remote_path = await self._push_to_remote(
+                            apple_note, None, markdown_subfolder
+                        )
+                        await self.db.upsert_mapping(
+                            local_uuid=uuid,
+                            local_name=apple_note.name,
+                            local_folder_uuid="",
+                            remote_path=remote_path,
+                            timestamp=datetime.now().timestamp(),
+                        )
                     processed_local_uuids.add(uuid)
                     processed_remote_paths.add(str(remote_path))
                     stats["created_remote"] += 1
@@ -254,23 +322,32 @@ class NotesSyncEngine:
 
                 if mapping:
                     # Had a mapping but local note is gone - delete remote
-                    logger.info(f"Local note deleted, deleting markdown: {md_note.name}")
-                    await self.markdown_adapter.delete_note(Path(remote_path_str))
-                    await self.db.delete_mapping_by_remote_path(remote_path_str)
-                    stats["deleted_remote"] += 1
+                    if skip_deletions:
+                        logger.info(f"Local note deleted, skipping deletion (--skip-deletions): {md_note.name}")
+                    elif dry_run:
+                        logger.info(f"[DRY RUN] Would delete markdown: {md_note.name}")
+                        stats["would_delete_remote"] += 1
+                    else:
+                        logger.info(f"Local note deleted, deleting markdown: {md_note.name}")
+                        await self.markdown_adapter.delete_note(Path(remote_path_str))
+                        await self.db.delete_mapping_by_remote_path(remote_path_str)
+                        stats["deleted_remote"] += 1
                 else:
                     # New remote file - create in Apple Notes
-                    logger.info(f"New remote note: {md_note.name}")
-                    note_uuid = await self._pull_from_remote(md_note, folder_name, None)
-                    if note_uuid:
-                        await self.db.upsert_mapping(
-                            local_uuid=note_uuid,
-                            local_name=md_note.name,
-                            local_folder_uuid="",
-                            remote_path=Path(remote_path_str),
-                            timestamp=datetime.now().timestamp(),
-                        )
-                        stats["created_local"] += 1
+                    if dry_run:
+                        logger.info(f"[DRY RUN] Would create local: {md_note.name}")
+                    else:
+                        logger.info(f"New remote note: {md_note.name}")
+                        note_uuid = await self._pull_from_remote(md_note, folder_name, None)
+                        if note_uuid:
+                            await self.db.upsert_mapping(
+                                local_uuid=note_uuid,
+                                local_name=md_note.name,
+                                local_folder_uuid="",
+                                remote_path=Path(remote_path_str),
+                                timestamp=datetime.now().timestamp(),
+                            )
+                    stats["created_local"] += 1
 
             logger.info(
                 f"Sync complete for {folder_name}: "
