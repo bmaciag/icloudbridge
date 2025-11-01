@@ -220,7 +220,9 @@ class NotesAdapter:
         """
         Parse Apple's date format to datetime.
 
-        Apple Notes returns dates like: "Monday, January 1, 2024 at 10:30:00 AM"
+        Apple Notes returns dates in different formats depending on locale:
+        - US format: "Monday, January 1, 2024 at 10:30:00 AM"
+        - UK/EU format: "Monday, 18 February 2023 at 14:24:28"
 
         Args:
             date_str: Date string from AppleScript
@@ -232,16 +234,37 @@ class NotesAdapter:
             # Remove day of week prefix (e.g., "Monday, ")
             date_str = re.sub(r"^[A-Za-z]+,\s+", "", date_str)
 
-            # Parse using strptime - Apple format is consistent
-            # Example: "January 1, 2024 at 10:30:00 AM"
-            return datetime.strptime(date_str, "%B %d, %Y at %I:%M:%S %p")
-        except ValueError:
-            # Fallback: try alternative format without "at"
+            # Try UK/EU format first: "18 February 2023 at 14:24:28"
+            # (day month year, 24-hour time)
+            try:
+                return datetime.strptime(date_str, "%d %B %Y at %H:%M:%S")
+            except ValueError:
+                pass
+
+            # Try US format: "January 1, 2024 at 10:30:00 AM"
+            try:
+                return datetime.strptime(date_str, "%B %d, %Y at %I:%M:%S %p")
+            except ValueError:
+                pass
+
+            # Try alternative format without "at"
             try:
                 return datetime.strptime(date_str, "%B %d, %Y %I:%M:%S %p")
             except ValueError:
-                logger.warning(f"Could not parse date: {date_str}, using current time")
-                return datetime.now()
+                pass
+
+            # Try UK/EU format without "at"
+            try:
+                return datetime.strptime(date_str, "%d %B %Y %H:%M:%S")
+            except ValueError:
+                pass
+
+            logger.warning(f"Could not parse date: {date_str}, using current time")
+            return datetime.now()
+
+        except Exception as e:
+            logger.warning(f"Error parsing date {date_str}: {e}, using current time")
+            return datetime.now()
 
     async def is_notes_running(self) -> bool:
         """
