@@ -268,6 +268,23 @@ class NotesDB:
 
         return count
 
+    async def get_stats(self) -> dict:
+        """
+        Get statistics about note synchronization.
+
+        Returns:
+            Dictionary with note counts and sync status
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            # Total notes
+            async with db.execute("SELECT COUNT(*) FROM note_mapping") as cursor:
+                total = (await cursor.fetchone())[0]
+
+            return {
+                "total": total,
+                "synced": total,  # All mappings are synced notes
+            }
+
     async def close(self) -> None:
         """Close database connection if open."""
         if self._connection:
@@ -488,6 +505,23 @@ class RemindersDB:
             await db.execute("DELETE FROM reminder_mapping")
             await db.commit()
             logger.info("All reminder mappings cleared from database")
+
+    async def get_stats(self) -> dict:
+        """
+        Get statistics about reminder synchronization.
+
+        Returns:
+            Dictionary with reminder counts and sync status
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            # Total reminders
+            async with db.execute("SELECT COUNT(*) FROM reminder_mapping") as cursor:
+                total = (await cursor.fetchone())[0]
+
+            return {
+                "total": total,
+                "synced": total,  # All mappings are synced reminders
+            }
 
     async def close(self) -> None:
         """Close database connection if open."""
@@ -816,6 +850,666 @@ class PasswordsDB:
             await db.execute("DELETE FROM password_entry")
             await db.commit()
             logger.info("All password entries cleared from database")
+
+    async def close(self) -> None:
+        """Close database connection if open."""
+        if self._connection:
+            await self._connection.close()
+            self._connection = None
+
+
+class SyncLogsDB:
+    """
+    Manages SQLite database for storing sync operation logs.
+
+    Stores detailed logs of all sync operations for audit trail and debugging.
+    Logs are automatically purged after the retention period (default 7 days).
+    """
+
+    def __init__(self, db_path: Path):
+        """
+        Initialize database connection.
+
+        Args:
+            db_path: Path to SQLite database file
+        """
+        self.db_path = db_path
+        self._connection: aiosqlite.Connection | None = None
+
+    async def initialize(self) -> None:
+        """
+        Initialize database schema if it doesn't exist.
+
+        Creates the sync_logs table for tracking sync operations.
+        """
+        # Ensure database directory exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sync_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    service TEXT NOT NULL,
+                    sync_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at REAL NOT NULL,
+                    completed_at REAL,
+                    duration_seconds REAL,
+                    stats_json TEXT,
+                    error_message TEXT,
+                    log_entries TEXT
+                )
+                """
+            )
+
+            # Create indexes for faster lookups
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sync_logs_service
+                ON sync_logs(service)
+                """
+            )
+
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sync_logs_started_at
+                ON sync_logs(started_at DESC)
+                """
+            )
+
+            await db.commit()
+            logger.debug(f"SyncLogsDB initialized at {self.db_path}")
+
+    async def create_log(
+        self,
+        service: str,
+        sync_type: str,
+        status: str = "running",
+    ) -> int:
+        """
+        Create a new sync log entry.
+
+        Args:
+            service: Service name ('notes', 'reminders', 'passwords')
+            sync_type: Type of sync ('manual', 'scheduled', 'auto')
+            status: Initial status ('running', 'success', 'error')
+
+        Returns:
+            int: Log entry ID
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO sync_logs (
+                    service, sync_type, status, started_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (service, sync_type, status, datetime.now().timestamp()),
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    async def update_log(
+        self,
+        log_id: int,
+        status: str | None = None,
+        duration_seconds: float | None = None,
+        stats_json: str | None = None,
+        error_message: str | None = None,
+        log_entries: str | None = None,
+    ) -> None:
+        """
+        Update an existing sync log entry.
+
+        Args:
+            log_id: Log entry ID
+            status: New status ('running', 'success', 'error')
+            duration_seconds: Total duration of sync operation
+            stats_json: JSON string of sync statistics
+            error_message: Error message if sync failed
+            log_entries: Newline-separated log entries
+        """
+        updates = []
+        values = []
+
+        if status is not None:
+            updates.append("status = ?")
+            values.append(status)
+
+        if duration_seconds is not None:
+            updates.append("duration_seconds = ?")
+            values.append(duration_seconds)
+
+        if stats_json is not None:
+            updates.append("stats_json = ?")
+            values.append(stats_json)
+
+        if error_message is not None:
+            updates.append("error_message = ?")
+            values.append(error_message)
+
+        if log_entries is not None:
+            updates.append("log_entries = ?")
+            values.append(log_entries)
+
+        # Always update completed_at
+        updates.append("completed_at = ?")
+        values.append(datetime.now().timestamp())
+
+        values.append(log_id)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                f"""
+                UPDATE sync_logs
+                SET {", ".join(updates)}
+                WHERE id = ?
+                """,
+                values,
+            )
+            await db.commit()
+
+    async def get_log(self, log_id: int) -> dict | None:
+        """
+        Get a sync log entry by ID.
+
+        Args:
+            log_id: Log entry ID
+
+        Returns:
+            Dictionary with log details, or None if not found
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM sync_logs
+                WHERE id = ?
+                """,
+                (log_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def get_logs(
+        self,
+        service: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        """
+        Get sync logs with optional filtering.
+
+        Args:
+            service: Filter by service name ('notes', 'reminders', 'passwords')
+            status: Filter by status ('running', 'success', 'error')
+            limit: Maximum number of logs to return
+            offset: Number of logs to skip
+
+        Returns:
+            List of log dictionaries
+        """
+        query = "SELECT * FROM sync_logs WHERE 1=1"
+        params = []
+
+        if service:
+            query += " AND service = ?"
+            params.append(service)
+
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+
+        query += " ORDER BY started_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def cleanup_old_logs(self, retention_days: int = 7) -> int:
+        """
+        Delete logs older than the retention period.
+
+        Args:
+            retention_days: Number of days to retain logs (default 7)
+
+        Returns:
+            int: Number of logs deleted
+        """
+        cutoff_timestamp = (datetime.now().timestamp() - (retention_days * 24 * 60 * 60))
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                DELETE FROM sync_logs
+                WHERE started_at < ?
+                """,
+                (cutoff_timestamp,),
+            )
+            await db.commit()
+            deleted_count = cursor.rowcount
+            logger.info(f"Cleaned up {deleted_count} old sync logs (older than {retention_days} days)")
+            return deleted_count
+
+    async def close(self) -> None:
+        """Close database connection if open."""
+        if self._connection:
+            await self._connection.close()
+            self._connection = None
+
+
+class SchedulesDB:
+    """
+    Manages SQLite database for storing sync schedules.
+
+    Stores schedule configurations that define when syncs should run automatically.
+    Integrates with APScheduler for actual job execution.
+    """
+
+    def __init__(self, db_path: Path):
+        """
+        Initialize database connection.
+
+        Args:
+            db_path: Path to SQLite database file
+        """
+        self.db_path = db_path
+        self._connection: aiosqlite.Connection | None = None
+
+    async def initialize(self) -> None:
+        """
+        Initialize database schema if it doesn't exist.
+
+        Creates the schedules table for storing schedule configurations.
+        """
+        # Ensure database directory exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schedules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    service TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    enabled BOOLEAN DEFAULT 1,
+                    schedule_type TEXT NOT NULL,
+                    interval_minutes INTEGER,
+                    cron_expression TEXT,
+                    next_run REAL,
+                    last_run REAL,
+                    config_json TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+
+            # Create indexes for faster lookups
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_schedules_service
+                ON schedules(service)
+                """
+            )
+
+            await db.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_schedules_enabled
+                ON schedules(enabled)
+                """
+            )
+
+            await db.commit()
+            logger.debug(f"SchedulesDB initialized at {self.db_path}")
+
+    async def create_schedule(
+        self,
+        service: str,
+        name: str,
+        schedule_type: str,
+        interval_minutes: int | None = None,
+        cron_expression: str | None = None,
+        config_json: str | None = None,
+        enabled: bool = True,
+    ) -> int:
+        """
+        Create a new schedule.
+
+        Args:
+            service: Service name ('notes', 'reminders', 'passwords')
+            name: User-friendly schedule name
+            schedule_type: Schedule type ('interval' or 'datetime')
+            interval_minutes: Interval in minutes (for interval type)
+            cron_expression: Cron expression (for datetime type)
+            config_json: JSON string of sync configuration options
+            enabled: Whether the schedule is enabled
+
+        Returns:
+            int: Schedule ID
+        """
+        now = datetime.now().timestamp()
+
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO schedules (
+                    service, name, enabled, schedule_type,
+                    interval_minutes, cron_expression, config_json,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    service,
+                    name,
+                    enabled,
+                    schedule_type,
+                    interval_minutes,
+                    cron_expression,
+                    config_json,
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    async def get_schedule(self, schedule_id: int) -> dict | None:
+        """
+        Get a schedule by ID.
+
+        Args:
+            schedule_id: Schedule ID
+
+        Returns:
+            Dictionary with schedule details, or None if not found
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM schedules
+                WHERE id = ?
+                """,
+                (schedule_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+
+    async def get_schedules(
+        self,
+        service: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[dict]:
+        """
+        Get all schedules with optional filtering.
+
+        Args:
+            service: Filter by service name
+            enabled: Filter by enabled status
+
+        Returns:
+            List of schedule dictionaries
+        """
+        query = "SELECT * FROM schedules WHERE 1=1"
+        params = []
+
+        if service:
+            query += " AND service = ?"
+            params.append(service)
+
+        if enabled is not None:
+            query += " AND enabled = ?"
+            params.append(enabled)
+
+        query += " ORDER BY created_at DESC"
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def update_schedule(
+        self,
+        schedule_id: int,
+        name: str | None = None,
+        enabled: bool | None = None,
+        schedule_type: str | None = None,
+        interval_minutes: int | None = None,
+        cron_expression: str | None = None,
+        config_json: str | None = None,
+        next_run: float | None = None,
+        last_run: float | None = None,
+    ) -> None:
+        """
+        Update an existing schedule.
+
+        Args:
+            schedule_id: Schedule ID
+            name: New schedule name
+            enabled: New enabled status
+            schedule_type: New schedule type
+            interval_minutes: New interval in minutes
+            cron_expression: New cron expression
+            config_json: New configuration JSON
+            next_run: Next run timestamp
+            last_run: Last run timestamp
+        """
+        updates = []
+        values = []
+
+        if name is not None:
+            updates.append("name = ?")
+            values.append(name)
+
+        if enabled is not None:
+            updates.append("enabled = ?")
+            values.append(enabled)
+
+        if schedule_type is not None:
+            updates.append("schedule_type = ?")
+            values.append(schedule_type)
+
+        if interval_minutes is not None:
+            updates.append("interval_minutes = ?")
+            values.append(interval_minutes)
+
+        if cron_expression is not None:
+            updates.append("cron_expression = ?")
+            values.append(cron_expression)
+
+        if config_json is not None:
+            updates.append("config_json = ?")
+            values.append(config_json)
+
+        if next_run is not None:
+            updates.append("next_run = ?")
+            values.append(next_run)
+
+        if last_run is not None:
+            updates.append("last_run = ?")
+            values.append(last_run)
+
+        # Always update updated_at
+        updates.append("updated_at = ?")
+        values.append(datetime.now().timestamp())
+
+        values.append(schedule_id)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                f"""
+                UPDATE schedules
+                SET {", ".join(updates)}
+                WHERE id = ?
+                """,
+                values,
+            )
+            await db.commit()
+
+    async def delete_schedule(self, schedule_id: int) -> None:
+        """
+        Delete a schedule.
+
+        Args:
+            schedule_id: Schedule ID
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                DELETE FROM schedules
+                WHERE id = ?
+                """,
+                (schedule_id,),
+            )
+            await db.commit()
+            logger.info(f"Schedule {schedule_id} deleted")
+
+    async def close(self) -> None:
+        """Close database connection if open."""
+        if self._connection:
+            await self._connection.close()
+            self._connection = None
+
+
+class SettingsDB:
+    """
+    Manages SQLite database for application settings.
+
+    Stores key-value pairs for application configuration that can be
+    modified through the web UI (e.g., log retention days, theme preferences).
+    """
+
+    def __init__(self, db_path: Path):
+        """
+        Initialize database connection.
+
+        Args:
+            db_path: Path to SQLite database file
+        """
+        self.db_path = db_path
+        self._connection: aiosqlite.Connection | None = None
+
+    async def initialize(self) -> None:
+        """
+        Initialize database schema if it doesn't exist.
+
+        Creates the settings table for storing key-value settings.
+        """
+        # Ensure database directory exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
+
+            await db.commit()
+            logger.debug(f"SettingsDB initialized at {self.db_path}")
+
+            # Set default values if they don't exist
+            await self.set_default("log_retention_days", "7")
+            await self.set_default("theme", "system")
+
+    async def set_default(self, key: str, value: str) -> None:
+        """
+        Set a default value for a setting if it doesn't exist.
+
+        Args:
+            key: Setting key
+            value: Default value
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (key, value, datetime.now().timestamp()),
+            )
+            await db.commit()
+
+    async def get_setting(self, key: str) -> str | None:
+        """
+        Get a setting value.
+
+        Args:
+            key: Setting key
+
+        Returns:
+            Setting value, or None if not found
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                """
+                SELECT value FROM settings
+                WHERE key = ?
+                """,
+                (key,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else None
+
+    async def get_all_settings(self) -> dict[str, str]:
+        """
+        Get all settings as a dictionary.
+
+        Returns:
+            Dictionary of all settings (key -> value)
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT key, value FROM settings") as cursor:
+                rows = await cursor.fetchall()
+                return {row[0]: row[1] for row in rows}
+
+    async def set_setting(self, key: str, value: str) -> None:
+        """
+        Set a setting value.
+
+        Args:
+            key: Setting key
+            value: Setting value
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                INSERT OR REPLACE INTO settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (key, value, datetime.now().timestamp()),
+            )
+            await db.commit()
+
+    async def delete_setting(self, key: str) -> None:
+        """
+        Delete a setting.
+
+        Args:
+            key: Setting key
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """
+                DELETE FROM settings
+                WHERE key = ?
+                """,
+                (key,),
+            )
+            await db.commit()
 
     async def close(self) -> None:
         """Close database connection if open."""

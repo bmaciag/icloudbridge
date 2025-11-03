@@ -1,6 +1,7 @@
 """Pydantic models for API request/response validation."""
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -63,19 +64,18 @@ class ReminderListResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
-    """Response model for sync status."""
+    """Response model for overall sync status."""
 
-    current_status: SyncStatus
-    last_sync: datetime | None = None
-    last_result: SyncResponse | None = None
+    notes: dict[str, Any]
+    reminders: dict[str, Any]
+    passwords: dict[str, Any]
 
 
 class HealthResponse(BaseModel):
     """Response model for health check."""
 
     status: str = "healthy"
-    version: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: str
 
 
 class VersionResponse(BaseModel):
@@ -83,7 +83,6 @@ class VersionResponse(BaseModel):
 
     version: str
     python_version: str
-    platform: str
 
 
 class ConfigResponse(BaseModel):
@@ -91,20 +90,31 @@ class ConfigResponse(BaseModel):
 
     notes_enabled: bool
     reminders_enabled: bool
+    passwords_enabled: bool
     notes_remote_folder: str | None = None
     reminders_caldav_url: str | None = None
     reminders_caldav_username: str | None = None
+    passwords_vaultwarden_url: str | None = None
+    passwords_vaultwarden_email: str | None = None
 
 
 class ConfigUpdateRequest(BaseModel):
     """Request model for configuration updates."""
 
+    data_dir: str | None = None
     notes_enabled: bool | None = None
     reminders_enabled: bool | None = None
+    passwords_enabled: bool | None = None
     notes_remote_folder: str | None = None
     reminders_caldav_url: str | None = None
     reminders_caldav_username: str | None = None
     reminders_caldav_password: str | None = Field(
+        default=None,
+        description="Password will be stored in system keyring",
+    )
+    passwords_vaultwarden_url: str | None = None
+    passwords_vaultwarden_email: str | None = None
+    passwords_vaultwarden_password: str | None = Field(
         default=None,
         description="Password will be stored in system keyring",
     )
@@ -116,3 +126,79 @@ class ErrorResponse(BaseModel):
     detail: str
     error_type: str = "error"
     timestamp: datetime = Field(default_factory=datetime.now)
+
+
+# Additional models for web UI
+
+class NotesSyncRequest(BaseModel):
+    """Request model for notes sync."""
+
+    folder: str | None = None
+    dry_run: bool = False
+    skip_deletions: bool = False
+    deletion_threshold: int = 5
+
+
+class RemindersSyncRequest(BaseModel):
+    """Request model for reminders sync."""
+
+    apple_calendar: str | None = None
+    caldav_calendar: str | None = None
+    auto: bool = True
+    dry_run: bool = False
+    skip_deletions: bool = False
+    deletion_threshold: int = 5
+
+
+class PasswordsSyncRequest(BaseModel):
+    """Request model for passwords sync."""
+
+    apple_csv_path: str | None = None
+    output_apple_csv: str | None = None
+
+
+class ScheduleCreate(BaseModel):
+    """Request model for creating a schedule."""
+
+    service: str = Field(..., description="Service name (notes, reminders, passwords)")
+    name: str = Field(..., description="User-friendly schedule name")
+    schedule_type: str = Field(..., description="Schedule type (interval or datetime)")
+    interval_minutes: int | None = Field(None, description="Interval in minutes")
+    cron_expression: str | None = Field(None, description="Cron expression")
+    config_json: str | None = Field(None, description="JSON sync configuration")
+    enabled: bool = True
+
+
+class ScheduleUpdate(BaseModel):
+    """Request model for updating a schedule."""
+
+    name: str | None = None
+    enabled: bool | None = None
+    schedule_type: str | None = None
+    interval_minutes: int | None = None
+    cron_expression: str | None = None
+    config_json: str | None = None
+
+
+class ScheduleResponse(BaseModel):
+    """Response model for schedule information."""
+
+    id: int
+    service: str
+    name: str
+    enabled: bool
+    schedule_type: str
+    interval_minutes: int | None
+    cron_expression: str | None
+    next_run: float | None
+    last_run: float | None
+    config_json: str | None
+    created_at: float
+    updated_at: float
+
+
+class SettingUpdate(BaseModel):
+    """Request model for updating settings."""
+
+    key: str
+    value: str

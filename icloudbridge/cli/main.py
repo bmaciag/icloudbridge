@@ -1556,6 +1556,323 @@ def passwords_reset(
         raise typer.Exit(1)
 
 
+# =============================================================================
+# Server Commands (Phase 1.6)
+# =============================================================================
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option("--host", "-h", help="Host to bind to")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", "-p", help="Port to bind to")] = 8000,
+    reload: Annotated[bool, typer.Option("--reload", help="Enable auto-reload (development)")] = False,
+    background: Annotated[bool, typer.Option("--background", "-d", help="Run in background (daemon mode)")] = False,
+) -> None:
+    """Start the iCloudBridge API server.
+
+    This command starts the FastAPI server that provides the web UI and REST API.
+
+    Examples:
+        # Start server on default port
+        icloudbridge serve
+
+        # Start on specific host and port
+        icloudbridge serve --host 0.0.0.0 --port 8080
+
+        # Start in background
+        icloudbridge serve --background
+
+        # Development mode with auto-reload
+        icloudbridge serve --reload
+    """
+    import uvicorn
+
+    console.print(Panel.fit(
+        f"[bold cyan]iCloudBridge API Server[/bold cyan]\n\n"
+        f"[white]Starting server on {host}:{port}[/white]",
+        border_style="cyan"
+    ))
+
+    if background:
+        # Run in background mode
+        import subprocess
+        import sys
+
+        # Get the path to this script
+        script_path = sys.argv[0]
+
+        # Create command without --background flag
+        cmd = [
+            sys.executable,
+            script_path,
+            "serve",
+            "--host", host,
+            "--port", str(port),
+        ]
+
+        if reload:
+            cmd.append("--reload")
+
+        # Start background process
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+        console.print(f"[green]✅ Server started in background (PID: {process.pid})[/green]")
+        console.print(f"[dim]Access the API at: http://{host}:{port}/api/docs[/dim]")
+        return
+
+    # Run in foreground
+    try:
+        console.print(f"[green]Server running at: http://{host}:{port}[/green]")
+        console.print(f"[dim]API docs: http://{host}:{port}/api/docs[/dim]")
+        console.print(f"[dim]Press Ctrl+C to stop[/dim]\n")
+
+        uvicorn.run(
+            "icloudbridge.api.app:app",
+            host=host,
+            port=port,
+            reload=reload,
+            log_level="info",
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Server stopped[/yellow]")
+
+
+@app.command()
+def install_service(
+    port: Annotated[int, typer.Option("--port", help="Port for API server")] = 8000,
+    start_on_boot: Annotated[bool, typer.Option("--start-on-boot", help="Start on login")] = True,
+) -> None:
+    """Install iCloudBridge as a macOS LaunchAgent service.
+
+    This creates a launchd plist file that starts the API server automatically.
+
+    Examples:
+        # Install with default settings
+        icloudbridge install-service
+
+        # Install without auto-start on boot
+        icloudbridge install-service --no-start-on-boot
+
+        # Install on custom port
+        icloudbridge install-service --port 8080
+    """
+    import plistlib
+    import subprocess
+    from pathlib import Path
+
+    # LaunchAgents directory
+    launch_agents_dir = Path.home() / "Library" / "LaunchAgents"
+    launch_agents_dir.mkdir(parents=True, exist_ok=True)
+
+    plist_path = launch_agents_dir / "com.icloudbridge.server.plist"
+
+    # Check if already installed
+    if plist_path.exists():
+        console.print("[yellow]⚠️  Service already installed[/yellow]")
+        if not typer.confirm("Overwrite existing service?"):
+            raise typer.Abort()
+
+    # Get paths
+    python_path = sys.executable
+    cli_module = "icloudbridge.cli.main"
+
+    # Create plist
+    plist = {
+        "Label": "com.icloudbridge.server",
+        "ProgramArguments": [
+            python_path,
+            "-m",
+            cli_module,
+            "serve",
+            "--port", str(port),
+        ],
+        "RunAtLoad": start_on_boot,
+        "KeepAlive": True,
+        "StandardOutPath": str(Path.home() / "Library" / "Logs" / "iCloudBridge" / "stdout.log"),
+        "StandardErrorPath": str(Path.home() / "Library" / "Logs" / "iCloudBridge" / "stderr.log"),
+        "WorkingDirectory": str(Path.home()),
+    }
+
+    # Create log directory
+    log_dir = Path.home() / "Library" / "Logs" / "iCloudBridge"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write plist file
+    with open(plist_path, "wb") as f:
+        plistlib.dump(plist, f)
+
+    console.print(f"[green]✅ Service installed at: {plist_path}[/green]")
+
+    # Load the service
+    if start_on_boot:
+        try:
+            subprocess.run(
+                ["launchctl", "load", str(plist_path)],
+                check=True,
+                capture_output=True,
+            )
+            console.print("[green]✅ Service loaded and started[/green]")
+            console.print(f"[dim]API accessible at: http://127.0.0.1:{port}/api/docs[/dim]")
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Failed to load service: {e.stderr.decode()}[/red]")
+    else:
+        console.print("[dim]Service installed but not loaded (use 'service start' to start)[/dim]")
+
+
+@app.command()
+def uninstall_service() -> None:
+    """Uninstall the iCloudBridge LaunchAgent service.
+
+    Examples:
+        icloudbridge uninstall-service
+    """
+    import subprocess
+    from pathlib import Path
+
+    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.icloudbridge.server.plist"
+
+    if not plist_path.exists():
+        console.print("[yellow]Service not installed[/yellow]")
+        return
+
+    # Unload the service
+    try:
+        subprocess.run(
+            ["launchctl", "unload", str(plist_path)],
+            check=True,
+            capture_output=True,
+        )
+        console.print("[green]✅ Service unloaded[/green]")
+    except subprocess.CalledProcessError:
+        # Service might not be loaded, continue anyway
+        pass
+
+    # Remove plist file
+    plist_path.unlink()
+    console.print(f"[green]✅ Service uninstalled[/green]")
+
+
+# Service management subcommand group
+service_app = typer.Typer(help="Manage the iCloudBridge service")
+app.add_typer(service_app, name="service")
+
+
+@service_app.command("status")
+def service_status() -> None:
+    """Check if the iCloudBridge service is running.
+
+    Examples:
+        icloudbridge service status
+    """
+    import subprocess
+    from pathlib import Path
+
+    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.icloudbridge.server.plist"
+
+    if not plist_path.exists():
+        console.print("[yellow]Service not installed[/yellow]")
+        console.print("[dim]Run 'icloudbridge install-service' to install[/dim]")
+        return
+
+    # Check service status
+    try:
+        result = subprocess.run(
+            ["launchctl", "list", "com.icloudbridge.server"],
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode == 0:
+            console.print("[green]✅ Service is running[/green]")
+            # Parse output to get PID
+            for line in result.stdout.split("\n"):
+                if "PID" in line:
+                    console.print(f"[dim]{line}[/dim]")
+        else:
+            console.print("[yellow]Service is installed but not running[/yellow]")
+            console.print("[dim]Run 'icloudbridge service start' to start[/dim]")
+
+    except Exception as e:
+        console.print(f"[red]Error checking service status: {e}[/red]")
+
+
+@service_app.command("start")
+def service_start() -> None:
+    """Start the iCloudBridge service.
+
+    Examples:
+        icloudbridge service start
+    """
+    import subprocess
+    from pathlib import Path
+
+    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.icloudbridge.server.plist"
+
+    if not plist_path.exists():
+        console.print("[red]Service not installed[/red]")
+        console.print("[dim]Run 'icloudbridge install-service' first[/dim]")
+        raise typer.Exit(1)
+
+    try:
+        subprocess.run(
+            ["launchctl", "load", str(plist_path)],
+            check=True,
+            capture_output=True,
+        )
+        console.print("[green]✅ Service started[/green]")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Failed to start service: {e.stderr.decode()}[/red]")
+        raise typer.Exit(1)
+
+
+@service_app.command("stop")
+def service_stop() -> None:
+    """Stop the iCloudBridge service.
+
+    Examples:
+        icloudbridge service stop
+    """
+    import subprocess
+    from pathlib import Path
+
+    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.icloudbridge.server.plist"
+
+    if not plist_path.exists():
+        console.print("[red]Service not installed[/red]")
+        raise typer.Exit(1)
+
+    try:
+        subprocess.run(
+            ["launchctl", "unload", str(plist_path)],
+            check=True,
+            capture_output=True,
+        )
+        console.print("[green]✅ Service stopped[/green]")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Failed to stop service: {e.stderr.decode()}[/red]")
+        raise typer.Exit(1)
+
+
+@service_app.command("restart")
+def service_restart() -> None:
+    """Restart the iCloudBridge service.
+
+    Examples:
+        icloudbridge service restart
+    """
+    console.print("[cyan]Restarting service...[/cyan]")
+    service_stop()
+    import time
+    time.sleep(1)
+    service_start()
+    console.print("[green]✅ Service restarted[/green]")
+
+
 def main_entry() -> None:
     """Entry point for the CLI."""
     try:

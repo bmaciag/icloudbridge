@@ -1,0 +1,184 @@
+import { useEffect } from 'react';
+import { Link, Outlet, useLocation } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  FileText,
+  Calendar,
+  Key,
+  Clock,
+  Terminal,
+  Settings,
+  Moon,
+  Sun,
+  Menu,
+  X,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { useAppStore } from '@/store/app-store';
+import { useSyncStore } from '@/store/sync-store';
+import { useWebSocket } from '@/hooks/useWebSocket';
+
+export default function Layout() {
+  const location = useLocation();
+  const {
+    theme,
+    setTheme,
+    sidebarOpen,
+    toggleSidebar,
+    wsConnected,
+    setWsConnected,
+  } = useAppStore();
+  const { setActiveSync, clearActiveSync, addLog, addScheduleRun } = useSyncStore();
+
+  // WebSocket connection
+  const { isConnected } = useWebSocket({
+    autoConnect: true,
+    onOpen: () => setWsConnected(true),
+    onClose: () => setWsConnected(false),
+    onSyncProgress: (service, data) => {
+      if (data.status === 'running') {
+        setActiveSync(service, data);
+      } else {
+        clearActiveSync(service);
+      }
+    },
+    onLogEntry: (service, data) => {
+      addLog(service, data.level, data.message);
+    },
+    onScheduleRun: (service, data) => {
+      addScheduleRun(data.schedule_id, data.schedule_name, service, data.status);
+    },
+  });
+
+  useEffect(() => {
+    setWsConnected(isConnected);
+  }, [isConnected, setWsConnected]);
+
+  const navigation = [
+    { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+    { name: 'Notes', href: '/notes', icon: FileText },
+    { name: 'Reminders', href: '/reminders', icon: Calendar },
+    { name: 'Passwords', href: '/passwords', icon: Key },
+    { name: 'Schedules', href: '/schedules', icon: Clock },
+    { name: 'Logs', href: '/logs', icon: Terminal },
+    { name: 'Settings', href: '/settings', icon: Settings },
+  ];
+
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+  };
+
+  return (
+    <div className="h-screen flex overflow-hidden bg-background">
+      {/* Sidebar */}
+      <div
+        className={`${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        } fixed inset-y-0 left-0 z-50 w-64 bg-card border-r transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0`}
+      >
+        <div className="h-full flex flex-col">
+          {/* Logo */}
+          <div className="h-16 flex items-center justify-between px-6 border-b">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                <span className="text-primary-foreground font-bold">iC</span>
+              </div>
+              <span className="font-semibold">iCloudBridge</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="lg:hidden"
+              onClick={toggleSidebar}
+            >
+              <X className="w-5 h-5" />
+            </Button>
+          </div>
+
+          {/* Navigation */}
+          <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+            {navigation.map((item) => {
+              const isActive = location.pathname === item.href;
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.name}
+                  to={item.href}
+                  className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+                  }`}
+                >
+                  <Icon className="w-5 h-5" />
+                  {item.name}
+                </Link>
+              );
+            })}
+          </nav>
+
+          {/* Footer */}
+          <div className="p-4 border-t space-y-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>WebSocket</span>
+              <Badge variant={wsConnected ? 'success' : 'destructive'} className="text-xs">
+                {wsConnected ? 'Connected' : 'Disconnected'}
+              </Badge>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={toggleTheme}
+            >
+              {theme === 'dark' ? (
+                <>
+                  <Sun className="w-4 h-4 mr-2" />
+                  Light Mode
+                </>
+              ) : (
+                <>
+                  <Moon className="w-4 h-4 mr-2" />
+                  Dark Mode
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Header */}
+        <header className="h-16 border-b bg-card flex items-center justify-between px-6 lg:px-8">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="lg:hidden"
+            onClick={toggleSidebar}
+          >
+            <Menu className="w-5 h-5" />
+          </Button>
+          <div className="flex items-center gap-4">
+            <Badge variant="outline">v0.1.0</Badge>
+          </div>
+        </header>
+
+        {/* Page Content */}
+        <main className="flex-1 overflow-y-auto p-6 lg:p-8">
+          <Outlet />
+        </main>
+      </div>
+
+      {/* Overlay for mobile */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={toggleSidebar}
+        />
+      )}
+    </div>
+  );
+}
