@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import EventKit
@@ -23,6 +23,74 @@ from EventKit import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_date(dt: Any) -> datetime | None:
+    """
+    Convert various date types to Python datetime with UTC timezone.
+
+    Handles:
+    - Python datetime objects (ensures UTC timezone)
+    - Apple NSDate objects (uses timeIntervalSince1970())
+    - Any object with timestamp() method
+    - Any object with isoformat() method
+    - None values
+
+    Args:
+        dt: Date object to normalize (datetime, NSDate, or other date-like object)
+
+    Returns:
+        Normalized datetime with UTC timezone, or None if conversion fails
+    """
+    if dt is None:
+        return None
+
+    # Already a Python datetime - just ensure UTC timezone
+    if isinstance(dt, datetime):
+        tz = getattr(dt, "tzinfo", None)
+        if tz is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    # Try to get Unix timestamp
+    timestamp = None
+
+    # Try Python's timestamp() method first
+    timestamp_getter = getattr(dt, "timestamp", None)
+    if callable(timestamp_getter):
+        try:
+            timestamp = float(timestamp_getter())
+        except Exception:
+            timestamp = None
+
+    # Try Apple's NSDate method timeIntervalSince1970()
+    if timestamp is None:
+        alt_getter = getattr(dt, "timeIntervalSince1970", None)
+        if callable(alt_getter):
+            try:
+                timestamp = float(alt_getter())
+            except Exception:
+                timestamp = None
+
+    # Convert timestamp to datetime
+    if timestamp is not None:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+    # Try isoformat parsing as last resort
+    iso_getter = getattr(dt, "isoformat", None)
+    if callable(iso_getter):
+        try:
+            parsed = datetime.fromisoformat(iso_getter())
+            tz = getattr(parsed, "tzinfo", None)
+            if tz is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            pass
+
+    # Could not convert
+    logger.warning(f"Could not normalize date of type {type(dt)}: {dt}")
+    return None
 
 
 @dataclass
@@ -281,6 +349,7 @@ class RemindersAdapter:
                     hour=dc.hour() if dc.hour() else 0,
                     minute=dc.minute() if dc.minute() else 0,
                     second=dc.second() if dc.second() else 0,
+                    tzinfo=timezone.utc,
                 )
             except (ValueError, AttributeError) as e:
                 logger.warning(f"Could not parse due date: {e}")
@@ -292,7 +361,7 @@ class RemindersAdapter:
             for alarm in ek_reminder.alarms():
                 alarm_obj = ReminderAlarm()
                 if alarm.absoluteDate():
-                    alarm_obj.trigger_date = alarm.absoluteDate()
+                    alarm_obj.trigger_date = normalize_date(alarm.absoluteDate())
                 elif alarm.relativeOffset():
                     alarm_obj.relative_offset = int(alarm.relativeOffset())
                 alarms.append(alarm_obj)
@@ -318,7 +387,7 @@ class RemindersAdapter:
                 if rule.recurrenceEnd():
                     end = rule.recurrenceEnd()
                     if end.endDate():
-                        rec_obj.end_date = end.endDate()
+                        rec_obj.end_date = normalize_date(end.endDate())
                     elif end.occurrenceCount():
                         rec_obj.occurrence_count = end.occurrenceCount()
 
@@ -335,9 +404,9 @@ class RemindersAdapter:
             completed=ek_reminder.isCompleted(),
             priority=ek_reminder.priority(),
             due_date=due_date,
-            creation_date=ek_reminder.creationDate(),
-            modification_date=ek_reminder.lastModifiedDate(),
-            completion_date=ek_reminder.completionDate(),
+            creation_date=normalize_date(ek_reminder.creationDate()),
+            modification_date=normalize_date(ek_reminder.lastModifiedDate()),
+            completion_date=normalize_date(ek_reminder.completionDate()),
             calendar_id=ek_reminder.calendar().calendarIdentifier(),
             calendar_name=ek_reminder.calendar().title(),
             alarms=alarms,

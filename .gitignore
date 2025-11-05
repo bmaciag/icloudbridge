@@ -49,6 +49,7 @@ htmlcov/
 
 # Logs
 *.log
+log/
 
 # Application data
 config.toml
@@ -67,9 +68,4 @@ config.toml
 *.app
 
 # Development files
-TODO.txt
-DEVELOPMENT.md
-check_call_mum.py
-test_timestamp_sync.py
-next.md
-next.log
+/debug/

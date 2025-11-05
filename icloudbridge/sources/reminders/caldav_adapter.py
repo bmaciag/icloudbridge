@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import caldav
@@ -258,18 +258,22 @@ class CalDAVAdapter:
             else:
                 due_date = None
 
-            # Timestamps
+            # Timestamps - strip microseconds as iCalendar doesn't support them
             created = vtodo.get("CREATED")
             if created and hasattr(created, "dt"):
                 created = created.dt
+                if hasattr(created, 'microsecond'):
+                    created = created.replace(microsecond=0)
             else:
-                created = datetime.now()
+                created = datetime.now(timezone.utc).replace(microsecond=0)
 
             last_modified = vtodo.get("LAST-MODIFIED")
             if last_modified and hasattr(last_modified, "dt"):
                 last_modified = last_modified.dt
+                if hasattr(last_modified, 'microsecond'):
+                    last_modified = last_modified.replace(microsecond=0)
             else:
-                last_modified = datetime.now()
+                last_modified = datetime.now(timezone.utc).replace(microsecond=0)
 
             # URL
             url_field = vtodo.get("URL")
@@ -445,22 +449,26 @@ class CalDAVAdapter:
             todo.add("description", description)
         todo.add("status", "COMPLETED" if completed else "NEEDS-ACTION")
         if completed:
-            todo.add("completed", datetime.now())
+            # Strip microseconds as iCalendar doesn't support them
+            todo.add("completed", datetime.now(timezone.utc).replace(microsecond=0))
             todo.add("percent-complete", 100)
         todo.add("priority", priority)
         if due_date:
-            todo.add("due", due_date)
+            # Strip microseconds as iCalendar doesn't support them
+            todo.add("due", due_date.replace(microsecond=0))
         if url:
             todo.add("url", url)
 
         # Use provided timestamps or default to now
         # This preserves Apple Reminder timestamps when syncing from Apple → CalDAV
-        created_time = creation_date if creation_date is not None else datetime.now()
-        modified_time = modification_date if modification_date is not None else datetime.now()
+        # Strip microseconds as iCalendar doesn't support them
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        created_time = creation_date.replace(microsecond=0) if creation_date is not None else now_utc
+        modified_time = modification_date.replace(microsecond=0) if modification_date is not None else now_utc
 
         todo.add("created", created_time)
         todo.add("last-modified", modified_time)
-        todo.add("dtstamp", datetime.now())
+        todo.add("dtstamp", now_utc)
 
         # Add alarms
         if alarms:
@@ -510,7 +518,7 @@ class CalDAVAdapter:
 
             return parsed
         except Exception as e:
-            logger.error(f"Failed to create TODO: {e}")
+            logger.error(f"Failed to create TODO: {e}", exc_info=True)
             return None
 
     async def update_todo(
@@ -549,11 +557,31 @@ class CalDAVAdapter:
 
         try:
             # Fetch the existing TODO - run blocking operation in thread pool
+            logger.debug(f"Loading TODO from CalDAV: {caldav_url}")
             todo = caldav.Todo(client=self.client, url=caldav_url)
             await asyncio.to_thread(todo.load)
+            logger.debug(f"Successfully loaded TODO, parsing iCalendar data...")
 
             # Parse existing iCalendar data
-            cal = Calendar.from_ical(todo.data)
+            # Handle malformed dates that may have been created with NSDate or string values
+            try:
+                cal = Calendar.from_ical(todo.data)
+            except ValueError as e:
+                if "Expected datetime, date, or time" in str(e):
+                    logger.warning(f"Detected malformed date in existing TODO, attempting to repair: {e}")
+                    # Try to repair malformed dates by removing them from the raw data
+                    # This allows the update to proceed and set correct dates
+                    import re
+                    repaired_data = re.sub(
+                        r'(DUE|DTSTART|COMPLETED|CREATED|LAST-MODIFIED):([^T\r\n][^\r\n]*)',
+                        r'',  # Remove malformed date lines
+                        todo.data.decode('utf-8') if isinstance(todo.data, bytes) else todo.data
+                    )
+                    cal = Calendar.from_ical(repaired_data)
+                    logger.info("Successfully repaired malformed dates in TODO")
+                else:
+                    raise
+
             vtodo = None
             for component in cal.walk():
                 if component.name == "VTODO":
@@ -564,24 +592,61 @@ class CalDAVAdapter:
                 logger.error("No VTODO component found")
                 return None
 
+            # After parsing, check for and remove any remaining malformed date fields
+            # These might have been parsed as strings instead of datetime objects
+            date_fields = ["DUE", "DTSTART", "COMPLETED", "CREATED", "LAST-MODIFIED", "DTSTAMP"]
+            for field in date_fields:
+                if field in vtodo:
+                    value = vtodo[field]
+                    # Check if the value is a string (malformed) instead of datetime
+                    if isinstance(value, str):
+                        logger.warning(f"Removing malformed {field} field: {value}")
+                        del vtodo[field]
+
+            logger.debug(f"Successfully parsed VTODO component, updating fields...")
+
+            # Delete ALL date/time fields to ensure clean state
+            # This prevents any malformed dates from surviving the update
+            # We'll re-add them below with proper datetime objects
+            date_fields_to_clean = ["DUE", "DTSTART", "COMPLETED", "CREATED", "LAST-MODIFIED", "DTSTAMP"]
+            for field in date_fields_to_clean:
+                if field in vtodo:
+                    del vtodo[field]
+            logger.debug(f"Cleaned all date fields from VTODO")
+
             # Update fields
             if summary is not None:
                 vtodo["SUMMARY"] = summary
             if description is not None:
                 vtodo["DESCRIPTION"] = description
             if completed is not None:
-                vtodo["STATUS"] = "COMPLETED" if completed else "NEEDS-ACTION"
+                if "STATUS" in vtodo:
+                    del vtodo["STATUS"]
+                vtodo.add("status", "COMPLETED" if completed else "NEEDS-ACTION")
+
                 if completed:
-                    vtodo["COMPLETED"] = datetime.now()
-                    vtodo["PERCENT-COMPLETE"] = 100
+                    # Strip microseconds as iCalendar doesn't support them
+                    if "COMPLETED" in vtodo:
+                        del vtodo["COMPLETED"]
+                    vtodo.add("completed", datetime.now(timezone.utc).replace(microsecond=0))
+
+                    if "PERCENT-COMPLETE" in vtodo:
+                        del vtodo["PERCENT-COMPLETE"]
+                    vtodo.add("percent-complete", 100)
                 else:
                     if "COMPLETED" in vtodo:
                         del vtodo["COMPLETED"]
-                    vtodo["PERCENT-COMPLETE"] = 0
+                    if "PERCENT-COMPLETE" in vtodo:
+                        del vtodo["PERCENT-COMPLETE"]
+                    vtodo.add("percent-complete", 0)
             if priority is not None:
                 vtodo["PRIORITY"] = priority
             if due_date is not None:
-                vtodo["DUE"] = due_date
+                # Strip microseconds as iCalendar doesn't support them
+                clean_due = due_date.replace(microsecond=0) if due_date else None
+                if "DUE" in vtodo:
+                    del vtodo["DUE"]
+                vtodo.add("due", clean_due)
             if url is not None:
                 vtodo["URL"] = url
 
@@ -620,33 +685,56 @@ class CalDAVAdapter:
                         rrule_dict["BYMONTHDAY"] = rule.by_month_day
                     vtodo.add("rrule", rrule_dict)
 
-            # Update last-modified timestamp
+            # Always set required timestamp fields with proper datetime objects
             # Use provided timestamp or default to now
             # This preserves Apple Reminder timestamps when syncing from Apple → CalDAV
-            modified_time = modification_date if modification_date is not None else datetime.now()
-            vtodo["LAST-MODIFIED"] = modified_time
+            # Strip microseconds as iCalendar doesn't support them
+            now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+            modified_time = (modification_date.replace(microsecond=0) if modification_date is not None else now_utc)
+
+            # Use .add() instead of assignment to ensure proper iCalendar serialization
+            # First delete existing values, then add new ones
+            if "LAST-MODIFIED" in vtodo:
+                del vtodo["LAST-MODIFIED"]
+            vtodo.add("last-modified", modified_time)
+
+            if "DTSTAMP" in vtodo:
+                del vtodo["DTSTAMP"]
+            vtodo.add("dtstamp", now_utc)
 
             # Save changes - run blocking operation in thread pool
+            logger.debug(f"Fields updated successfully, preparing to save...")
             ical_data = cal.to_ical().decode("utf-8")
 
             # Debug: Log what we're sending
             logger.debug(f"Setting LAST-MODIFIED to: {modified_time}")
             logger.debug(f"iCalendar data being sent:\n{ical_data}")
 
-            todo.data = ical_data
-            await asyncio.to_thread(todo.save)
+            logger.debug(f"Saving TODO to CalDAV server...")
+            # Use direct PUT instead of save() since we don't have a parent calendar set
+            # The caldav library's save() method needs parent.url which we don't have
+            await asyncio.to_thread(
+                self.client.put,
+                caldav_url,
+                ical_data,
+                {"Content-Type": "text/calendar; charset=utf-8"}
+            )
+            logger.debug(f"Successfully saved TODO to CalDAV server")
 
             logger.info(f"Updated TODO: {caldav_url}")
 
-            # Debug: Re-fetch to see what the server actually saved
-            updated_todo = self._parse_todo(todo)
+            # Re-fetch the TODO to get the server's version
+            logger.debug(f"Re-fetching TODO to verify update...")
+            todo_refetch = caldav.Todo(client=self.client, url=caldav_url)
+            await asyncio.to_thread(todo_refetch.load)
+            updated_todo = self._parse_todo(todo_refetch)
             if updated_todo:
                 logger.debug(f"Server returned LAST-MODIFIED: {updated_todo.last_modified}")
 
             return updated_todo
 
         except Exception as e:
-            logger.error(f"Failed to update TODO: {e}")
+            logger.error(f"Failed to update TODO: {e}", exc_info=True)
             return None
 
     async def delete_todo(self, caldav_url: str) -> bool:

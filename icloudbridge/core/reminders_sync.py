@@ -21,6 +21,45 @@ from icloudbridge.utils.db import RemindersDB
 logger = logging.getLogger(__name__)
 
 
+def setup_sync_file_logging(log_dir: Path) -> logging.FileHandler:
+    """
+    Set up a file handler for this sync operation.
+
+    Args:
+        log_dir: Directory to store log files (will be created if doesn't exist)
+
+    Returns:
+        FileHandler that was added to the logger
+    """
+    # Create log directory if it doesn't exist
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create log filename with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = log_dir / f"sync_{timestamp}.log"
+
+    # Create file handler
+    file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+
+    # Create detailed formatter for file logs
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(formatter)
+
+    # Add handler to root logger to capture all logs
+    root_logger = logging.getLogger()
+    root_logger.addHandler(file_handler)
+    # Set root logger to DEBUG so all messages are captured
+    root_logger.setLevel(logging.DEBUG)
+
+    logger.info(f"Sync log file created: {log_file}")
+
+    return file_handler
+
+
 class RemindersSyncEngine:
     """
     Orchestrates bidirectional synchronization between Apple Reminders and CalDAV.
@@ -122,6 +161,8 @@ class RemindersSyncEngine:
         }
 
         try:
+            logger.info(f"Starting sync: {apple_calendar_name} → {caldav_calendar_name}")
+            logger.info(f"Dry run: {dry_run}, Skip deletions: {skip_deletions}")
             # Step 0: Ensure calendars exist on both sides
             # Check if Apple Reminders calendar exists, create if not
             apple_calendars = await self.reminders_adapter.list_calendars()
@@ -514,7 +555,12 @@ class RemindersSyncEngine:
                     stats["created_remote"] += 1
                     logger.info(f"Created in CalDAV: {created.summary}")
                 else:
-                    logger.error(f"Failed to create remote TODO '{local_reminder.title}'")
+                    # Log creation failure prominently
+                    logger.error(
+                        f"⚠️  CALDAV CREATION FAILED for '{local_reminder.title}' ⚠️\n"
+                        f"    Apple UUID: {local_reminder.uuid}\n"
+                        f"    Will retry on next sync"
+                    )
                     stats["errors"] += 1
 
             except Exception as e:
@@ -595,7 +641,23 @@ class RemindersSyncEngine:
                     stats["updated_remote"] += 1
                     logger.info(f"Updated in CalDAV: {updated.summary}")
                 else:
-                    logger.error(f"Failed to update remote TODO '{local_reminder.title}'")
+                    # Option D: Update database even on failure to prevent infinite retries
+                    # Log the failure prominently so it's visible in logs
+                    logger.error(
+                        f"⚠️  CALDAV UPDATE FAILED for '{local_reminder.title}' ⚠️\n"
+                        f"    CalDAV URL: {remote_todo.caldav_url}\n"
+                        f"    Updating database last_sync to prevent infinite retries\n"
+                        f"    Apple modification date: {local_reminder.modification_date}"
+                    )
+
+                    # Update database to prevent this reminder from being retried every sync
+                    await self.db.update_mapping(
+                        local_uuid=local_reminder.uuid,
+                        remote_uid=remote_uid,
+                        remote_caldav_url=remote_todo.caldav_url,
+                        last_sync=local_reminder.modification_date,
+                    )
+
                     stats["errors"] += 1
 
             except Exception as e:
@@ -836,33 +898,45 @@ class RemindersSyncEngine:
         Returns:
             Dict mapping calendar pairs to their sync statistics
         """
-        all_stats = {}
+        # Set up file logging for this sync operation (all calendars)
+        log_dir = Path.home() / ".icloudbridge" / "log" / "reminder_sync"
+        file_handler = setup_sync_file_logging(log_dir)
 
-        for apple_cal, caldav_cal in calendar_mappings.items():
-            logger.info(f"Syncing: {apple_cal} → {caldav_cal}")
-            try:
-                stats = await self.sync_calendar(
-                    apple_calendar_name=apple_cal,
-                    caldav_calendar_name=caldav_cal,
-                    dry_run=dry_run,
-                    skip_deletions=skip_deletions,
-                    deletion_threshold=deletion_threshold,
-                )
-                all_stats[f"{apple_cal} → {caldav_cal}"] = stats
-            except Exception as e:
-                logger.error(f"Failed to sync {apple_cal} → {caldav_cal}: {e}")
-                all_stats[f"{apple_cal} → {caldav_cal}"] = {
-                    "created_local": 0,
-                    "created_remote": 0,
-                    "updated_local": 0,
-                    "updated_remote": 0,
-                    "deleted_local": 0,
-                    "deleted_remote": 0,
-                    "unchanged": 0,
-                    "errors": 1,
-                }
+        try:
+            all_stats = {}
 
-        return all_stats
+            for apple_cal, caldav_cal in calendar_mappings.items():
+                logger.info(f"Syncing: {apple_cal} → {caldav_cal}")
+                try:
+                    stats = await self.sync_calendar(
+                        apple_calendar_name=apple_cal,
+                        caldav_calendar_name=caldav_cal,
+                        dry_run=dry_run,
+                        skip_deletions=skip_deletions,
+                        deletion_threshold=deletion_threshold,
+                    )
+                    all_stats[f"{apple_cal} → {caldav_cal}"] = stats
+                except Exception as e:
+                    logger.error(f"Failed to sync {apple_cal} → {caldav_cal}: {e}")
+                    all_stats[f"{apple_cal} → {caldav_cal}"] = {
+                        "created_local": 0,
+                        "created_remote": 0,
+                        "updated_local": 0,
+                        "updated_remote": 0,
+                        "deleted_local": 0,
+                        "deleted_remote": 0,
+                        "unchanged": 0,
+                        "errors": 1,
+                    }
+
+            return all_stats
+
+        finally:
+            # Clean up file logging handler
+            file_handler.flush()  # Ensure all logs are written to disk
+            logging.getLogger().removeHandler(file_handler)
+            file_handler.close()
+            logger.debug("File logging handler removed")
 
     async def discover_and_sync_all(
         self,

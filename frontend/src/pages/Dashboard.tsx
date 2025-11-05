@@ -40,6 +40,9 @@ export default function Dashboard() {
       idle: { variant: 'secondary', label: 'Idle' },
       running: { variant: 'default', label: 'Running' },
       success: { variant: 'success', label: 'Success' },
+      completed: { variant: 'success', label: 'Success' },
+      partial_success: { variant: 'warning', label: 'Partial Success' },
+      failed: { variant: 'destructive', label: 'Failed' },
       error: { variant: 'destructive', label: 'Error' },
     };
     const config = statusMap[serviceStatus] || statusMap.idle;

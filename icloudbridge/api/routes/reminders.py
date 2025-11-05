@@ -129,10 +129,29 @@ async def sync_reminders(
                 deletion_threshold=request.deletion_threshold,
             )
 
-            # Return per-calendar stats with details
+            # Aggregate stats from per-calendar results
+            total_errors = 0
+            total_created = 0
+            total_updated = 0
+            total_deleted = 0
+            total_unchanged = 0
+
+            for cal_stats in per_calendar_results.values():
+                total_errors += cal_stats.get("errors", 0)
+                total_created += cal_stats.get("created_remote", 0) + cal_stats.get("created_local", 0)
+                total_updated += cal_stats.get("updated_remote", 0) + cal_stats.get("updated_local", 0)
+                total_deleted += cal_stats.get("deleted_remote", 0) + cal_stats.get("deleted_local", 0)
+                total_unchanged += cal_stats.get("unchanged", 0)
+
+            # Return per-calendar stats with aggregated totals
             result = {
                 "calendars_synced": len(per_calendar_results),
                 "per_calendar": per_calendar_results,  # Keep detailed breakdown
+                "total_errors": total_errors,
+                "total_created": total_created,
+                "total_updated": total_updated,
+                "total_deleted": total_deleted,
+                "total_unchanged": total_unchanged,
             }
 
         else:
@@ -152,6 +171,7 @@ async def sync_reminders(
                 "total_updated": 0,
                 "total_deleted": 0,
                 "total_unchanged": 0,
+                "total_errors": 0,
             }
 
             for apple_calendar, caldav_calendar in mappings.items():
@@ -170,20 +190,35 @@ async def sync_reminders(
                     all_stats["total_updated"] += result.get("updated", 0)
                     all_stats["total_deleted"] += result.get("deleted", 0)
                     all_stats["total_unchanged"] += result.get("unchanged", 0)
+                    all_stats["total_errors"] += result.get("errors", 0)
 
                 except Exception as e:
                     logger.error(f"Failed to sync {apple_calendar} → {caldav_calendar}: {e}")
+                    all_stats["total_errors"] += 1
                     # Continue with other calendars even if one fails
 
             result = all_stats
 
         duration = time.time() - start_time
 
-        # Update sync log with success (only if not dry run)
+        # Determine sync status based on errors
+        total_errors = result.get("total_errors", 0)
+        if total_errors > 0:
+            # Check if there were any successful operations
+            successful_ops = (
+                result.get("total_created", 0) +
+                result.get("total_updated", 0) +
+                result.get("total_deleted", 0)
+            )
+            sync_status = "partial_success" if successful_ops > 0 else "failed"
+        else:
+            sync_status = "completed"
+
+        # Update sync log (only if not dry run)
         if sync_logs_db and log_id:
             await sync_logs_db.update_log(
                 log_id=log_id,
-                status="completed",
+                status=sync_status,
                 duration_seconds=round(duration, 0),
                 stats_json=json.dumps(result),
             )
@@ -203,15 +238,26 @@ async def sync_reminders(
                 msg_parts.append(f"deleted {result['total_deleted']}")
 
             if msg_parts:
-                message = f"Successfully synced {calendars_count} calendar(s): {', '.join(msg_parts)} reminder(s)"
+                base_message = f"Synced {calendars_count} calendar(s): {', '.join(msg_parts)} reminder(s)"
             else:
-                message = f"Successfully synced {calendars_count} calendar(s), no changes needed"
+                base_message = f"Synced {calendars_count} calendar(s), no changes needed"
+
+            # Add error information if any
+            if total_errors > 0:
+                base_message += f" (⚠️ {total_errors} error(s) occurred)"
+
+            message = base_message
         else:
             # Auto mode or simple result
-            message = f"Successfully synced {calendars_count} calendar(s)"
+            message = f"Synced {calendars_count} calendar(s)"
+            if total_errors > 0:
+                message += f" (⚠️ {total_errors} error(s) occurred)"
+
+        # Determine overall status for API response
+        api_status = "success" if total_errors == 0 else "partial_success" if sync_status == "partial_success" else "error"
 
         return {
-            "status": "success",
+            "status": api_status,
             "message": message,
             "duration_seconds": duration,
             "stats": result,
