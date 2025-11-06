@@ -72,7 +72,7 @@ icloudbridge health
 
 ### 2. Configure
 
-Create a configuration file at `~/Library/Application Support/iCloudBridge/config.toml`:
+Create a configuration file at `~/.icloudbridge/config.toml`:
 
 ```toml
 [general]
@@ -106,6 +106,9 @@ icloudbridge config --show
 ```bash
 # Sync notes
 icloudbridge notes sync
+
+# Sync notes and export rich snapshots (read-only)
+icloudbridge notes sync --rich-notes
 
 # Sync notes (dry run)
 icloudbridge notes sync --dry-run

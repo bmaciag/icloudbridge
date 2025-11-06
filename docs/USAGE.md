@@ -29,7 +29,7 @@ icloudbridge [OPTIONS] COMMAND [ARGS]
 
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
-| `--config` | `-c` | Path to configuration file | `~/Library/Application Support/iCloudBridge/config.toml` |
+| `--config` | `-c` | Path to configuration file | `~/.icloudbridge/config.toml` |
 | `--log-level` | `-l` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | INFO |
 | `--help` | | Show help message | |
 
@@ -51,13 +51,13 @@ Create a default configuration file.
 icloudbridge config --init
 ```
 
-**Creates**: `~/Library/Application Support/iCloudBridge/config.toml`
+**Creates**: `~/.icloudbridge/config.toml`
 
 **Example config**:
 ```toml
 [general]
 log_level = "INFO"
-data_dir = "~/Library/Application Support/iCloudBridge"
+data_dir = "~/.icloudbridge"
 
 [notes]
 enabled = true
@@ -103,6 +103,7 @@ icloudbridge notes sync [OPTIONS]
 | `--dry-run` | `-n` | flag | Preview changes without applying them | false |
 | `--skip-deletions` | | flag | Skip all deletion operations | false |
 | `--deletion-threshold` | | INT | Max deletions before confirmation (-1 to disable) | 5 |
+| `--rich-notes / --no-rich-notes` | | flag | After sync, export read-only RichNotes snapshots | false |
 
 **Examples**:
 
@@ -112,6 +113,9 @@ icloudbridge notes sync
 
 # Preview changes without syncing
 icloudbridge notes sync --dry-run
+
+# Export rich Markdown snapshots (read-only)
+icloudbridge notes sync --rich-notes
 
 # Sync specific folder only
 icloudbridge notes sync --folder "Work Notes"
@@ -167,7 +171,7 @@ Configuration:
 
 Database:
   Total mappings: 152
-  Database: ~/Library/Application Support/iCloudBridge/notes.db
+  Database: ~/.icloudbridge/notes.db
 ```
 
 ### `notes reset`
@@ -313,7 +317,7 @@ Calendar Mappings:
   "Work" → "work-tasks"
 
 Last Sync: 2025-11-02 15:30:00 (2 hours ago)
-Database: ~/Library/Application Support/iCloudBridge/reminders.db
+Database: ~/.icloudbridge/reminders.db
 ```
 
 ### `reminders reset`
@@ -415,12 +419,12 @@ Skipped (unchanged)        2135
 📥 VaultWarden → Apple (Pull)
 ============================================================
 ✅ Generated Apple CSV with 3 new entries
-   File: ~/Library/Application Support/iCloudBridge/apple-import.csv
+   File: ~/.icloudbridge/apple-import.csv
 
 ⚠️  Manual step required:
    1. Open Passwords app
    2. File → Import Passwords
-   3. Select: ~/Library/Application Support/iCloudBridge/apple-import.csv
+   3. Select: ~/.icloudbridge/apple-import.csv
    4. Delete CSV file after import
 
 ============================================================
@@ -430,7 +434,7 @@ Skipped (unchanged)        2135
 ⚠️  SECURITY REMINDER
    Delete CSV files after import:
    → rm ~/Downloads/passwords.csv
-   → rm ~/Library/Application Support/iCloudBridge/apple-import.csv
+   → rm ~/.icloudbridge/apple-import.csv
 ```
 
 **What Gets Automated**:
@@ -560,7 +564,7 @@ Last Syncs:
   Bitwarden import       Never
   Apple export           Never
 
-Database: ~/Library/Application Support/iCloudBridge/passwords.db
+Database: ~/.icloudbridge/passwords.db
 ```
 
 ### `passwords-delete-vaultwarden-credentials`
@@ -642,11 +646,11 @@ All systems operational
 
 | File | Path |
 |------|------|
-| Config | `~/Library/Application Support/iCloudBridge/config.toml` |
-| Notes DB | `~/Library/Application Support/iCloudBridge/notes.db` |
-| Reminders DB | `~/Library/Application Support/iCloudBridge/reminders.db` |
-| Passwords DB | `~/Library/Application Support/iCloudBridge/passwords.db` |
-| Logs | `~/Library/Application Support/iCloudBridge/logs/` |
+| Config | `~/.icloudbridge/config.toml` |
+| Notes DB | `~/.icloudbridge/notes.db` |
+| Reminders DB | `~/.icloudbridge/reminders.db` |
+| Passwords DB | `~/.icloudbridge/passwords.db` |
+| Logs | `~/.icloudbridge/logs/` |
 
 ### Environment Variables
 

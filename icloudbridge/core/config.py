@@ -171,7 +171,7 @@ class GeneralConfig(BaseSettings):
 
     log_level: str = "INFO"
     data_dir: Path = Field(
-        default_factory=lambda: Path.home() / "Library" / "Application Support" / "iCloudBridge"
+        default_factory=lambda: Path.home() / ".icloudbridge"
     )
     # Runtime metadata - not serialized to config file (stored in settings DB instead)
     config_file: Path | None = Field(default=None, exclude=True)
@@ -250,8 +250,23 @@ class AppConfig(BaseSettings):
 
     @property
     def db_path(self) -> Path:
-        """Get path to SQLite database."""
-        return self.general.data_dir / "icloudbridge.db"
+        """[Deprecated] Path to legacy combined SQLite database."""
+        return self.notes_db_path
+
+    @property
+    def notes_db_path(self) -> Path:
+        """Path to the Notes sync database."""
+        return self.general.data_dir / "notes.db"
+
+    @property
+    def reminders_db_path(self) -> Path:
+        """Path to the Reminders sync database."""
+        return self.general.data_dir / "reminders.db"
+
+    @property
+    def passwords_db_path(self) -> Path:
+        """Path to the Passwords sync database."""
+        return self.general.data_dir / "passwords.db"
 
     @property
     def default_config_path(self) -> Path:

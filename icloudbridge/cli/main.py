@@ -15,7 +15,9 @@ from rich.table import Table
 from icloudbridge import __version__
 from icloudbridge.core.config import load_config
 from icloudbridge.core.reminders_sync import RemindersSyncEngine
+from icloudbridge.core.rich_notes_export import RichNotesExporter
 from icloudbridge.core.sync import NotesSyncEngine
+from icloudbridge.utils.settings_db import get_config_path, set_config_path
 
 # Create Typer app
 app = typer.Typer(
@@ -59,7 +61,17 @@ def main(
     """iCloudBridge - Sync Apple Notes & Reminders."""
     # Store config in context for subcommands
     ctx.ensure_object(dict)
-    ctx.obj["config"] = load_config(config_file)
+    effective_config_path = config_file
+    if effective_config_path is None:
+        stored_path = get_config_path()
+        if stored_path:
+            effective_config_path = stored_path
+
+    cfg = load_config(effective_config_path)
+    ctx.obj["config"] = cfg
+
+    if cfg.general.config_file:
+        set_config_path(cfg.general.config_file)
 
     # Set up logging based on config or CLI arg
     if log_level == "INFO" and ctx.obj["config"].general.log_level != "INFO":
@@ -117,6 +129,7 @@ def config(
         # Create config with example values
         try:
             cfg.save_to_file(config_path)
+            set_config_path(config_path)
             console.print(f"[green]✓ Config file created:[/green] {config_path}")
             console.print("\n[cyan]Example configuration:[/cyan]")
             console.print(f"[dim]{config_path}[/dim]\n")
@@ -177,6 +190,42 @@ def config(
         )
 
 
+@app.command("db-paths")
+def db_paths(ctx: typer.Context) -> None:
+    """Show the database files used by the CLI."""
+    cfg = ctx.obj["config"]
+
+    table = Table(title="Database Locations")
+    table.add_column("Database", style="cyan", no_wrap=True)
+    table.add_column("Path", style="green")
+    table.add_column("Status", style="magenta")
+
+    entries = [
+        (
+            "Notes",
+            cfg.notes_db_path,
+            "Apple Notes ↔ Markdown sync mappings",
+        ),
+        (
+            "Reminders",
+            cfg.reminders_db_path,
+            "Apple Reminders ↔ CalDAV sync mappings",
+        ),
+        (
+            "Passwords",
+            cfg.passwords_db_path,
+            "Passwords sync metadata",
+        ),
+    ]
+
+    for name, path, description in entries:
+        exists = path.exists()
+        status = "✓ exists" if exists else "✗ not created yet"
+        table.add_row(name, f"{path}\n[dim]{description}[/dim]", status)
+
+    console.print(table)
+
+
 @app.command()
 def health(ctx: typer.Context) -> None:
     """Check application health and dependencies."""
@@ -190,11 +239,24 @@ def health(ctx: typer.Context) -> None:
     else:
         console.print("✗ Data directory does not exist", style="red")
 
-    # Check database
-    if cfg.db_path.exists():
-        console.print("✓ Database exists", style="green")
+    # Check databases
+    notes_db = cfg.notes_db_path
+    if notes_db.exists():
+        console.print(f"✓ Notes DB ready: {notes_db}", style="green")
     else:
-        console.print("ℹ Database not initialized", style="yellow")
+        console.print(f"ℹ Notes DB not initialized: {notes_db}", style="yellow")
+
+    reminders_db = cfg.reminders_db_path
+    if reminders_db.exists():
+        console.print(f"✓ Reminders DB ready: {reminders_db}", style="green")
+    else:
+        console.print(f"ℹ Reminders DB not initialized: {reminders_db}", style="yellow")
+
+    passwords_db = cfg.passwords_db_path
+    if passwords_db.exists():
+        console.print(f"✓ Passwords DB ready: {passwords_db}", style="green")
+    else:
+        console.print(f"ℹ Passwords DB not initialized: {passwords_db}", style="yellow")
 
     # Check notes remote folder
     if cfg.notes.enabled:
@@ -227,6 +289,11 @@ def notes_sync(
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Preview changes without applying them"),
     skip_deletions: bool = typer.Option(False, "--skip-deletions", help="Skip all deletion operations"),
     deletion_threshold: int = typer.Option(5, "--deletion-threshold", help="Max deletions before confirmation (use -1 to disable)"),
+    rich_notes: bool = typer.Option(
+        False,
+        "--rich-notes/--no-rich-notes",
+        help="After syncing, export rich notes snapshot into RichNotes/",
+    ),
 ) -> None:
     """Synchronize notes between Apple Notes and markdown files."""
     cfg = ctx.obj["config"]
@@ -250,7 +317,7 @@ def notes_sync(
         # Initialize sync engine
         sync_engine = NotesSyncEngine(
             markdown_base_path=cfg.notes.remote_folder,
-            db_path=cfg.db_path,
+            db_path=cfg.notes_db_path,
         )
         await sync_engine.initialize()
 
@@ -385,6 +452,20 @@ def notes_sync(
         logging.exception("Sync operation failed")
         raise typer.Exit(1) from e
 
+    if rich_notes:
+        try:
+            exporter = RichNotesExporter(cfg.notes_db_path, cfg.notes.remote_folder)
+            exporter.export(dry_run=dry_run)
+            if dry_run:
+                console.print(
+                    "[yellow]RichNotes export skipped (dry run). Run without --dry-run to generate files.[/yellow]"
+                )
+            else:
+                console.print("[green]✓ RichNotes export complete[/green]")
+        except Exception as exc:  # pragma: no cover - filesystem heavy
+            console.print(f"[red]RichNotes export failed: {exc}[/red]")
+            logging.exception("RichNotes export failed")
+
 
 @notes_app.command("list")
 def notes_list(ctx: typer.Context) -> None:
@@ -395,7 +476,7 @@ def notes_list(ctx: typer.Context) -> None:
         # Initialize sync engine
         sync_engine = NotesSyncEngine(
             markdown_base_path=cfg.notes.remote_folder or Path("/tmp"),
-            db_path=cfg.db_path,
+            db_path=cfg.notes_db_path,
         )
         await sync_engine.initialize()
 
@@ -441,7 +522,7 @@ def notes_status(ctx: typer.Context) -> None:
         # Initialize sync engine
         sync_engine = NotesSyncEngine(
             markdown_base_path=cfg.notes.remote_folder or Path("/tmp"),
-            db_path=cfg.db_path,
+            db_path=cfg.notes_db_path,
         )
         await sync_engine.initialize()
 
@@ -455,7 +536,7 @@ def notes_status(ctx: typer.Context) -> None:
 
         table.add_row("Total Synced Notes", str(status["total_mappings"]))
         table.add_row("Remote Folder", str(cfg.notes.remote_folder))
-        table.add_row("Database", str(cfg.db_path))
+        table.add_row("Database", str(cfg.notes_db_path))
 
         console.print(table)
 
@@ -500,7 +581,7 @@ def notes_reset(
         # Initialize sync engine
         sync_engine = NotesSyncEngine(
             markdown_base_path=cfg.notes.remote_folder or Path("/tmp"),
-            db_path=cfg.db_path,
+            db_path=cfg.notes_db_path,
         )
         await sync_engine.initialize()
 
@@ -609,7 +690,7 @@ def reminders_sync(
             caldav_url=cfg.reminders.caldav_url,
             caldav_username=cfg.reminders.caldav_username,
             caldav_password=caldav_password,
-            db_path=cfg.db_path,
+            db_path=cfg.reminders_db_path,
         )
         await sync_engine.initialize()
 
@@ -823,7 +904,7 @@ def reminders_reset(
             caldav_url=cfg.reminders.caldav_url or "http://dummy.url",
             caldav_username=cfg.reminders.caldav_username or "dummy",
             caldav_password=cfg.reminders.caldav_password or "dummy",
-            db_path=cfg.db_path,
+            db_path=cfg.reminders_db_path,
         )
         await sync_engine.db.initialize()
         await sync_engine.reset_database()
@@ -948,7 +1029,7 @@ def passwords_import_apple(
         raise typer.Exit(1)
 
     # Initialize database
-    db_path = cfg.general.data_dir / "passwords.db"
+    db_path = cfg.passwords_db_path
     db = PasswordsDB(db_path)
 
     async def run_import():
@@ -1020,7 +1101,7 @@ def passwords_export_bitwarden(
         raise typer.Exit(1)
 
     # Initialize database
-    db_path = cfg.general.data_dir / "passwords.db"
+    db_path = cfg.passwords_db_path
     db = PasswordsDB(db_path)
 
     async def run_export():
@@ -1079,7 +1160,7 @@ def passwords_import_bitwarden(
         raise typer.Exit(1)
 
     # Initialize database
-    db_path = cfg.general.data_dir / "passwords.db"
+    db_path = cfg.passwords_db_path
     db = PasswordsDB(db_path)
 
     async def run_import():
@@ -1150,7 +1231,7 @@ def passwords_export_apple(
         raise typer.Exit(1)
 
     # Initialize database
-    db_path = cfg.general.data_dir / "passwords.db"
+    db_path = cfg.passwords_db_path
     db = PasswordsDB(db_path)
 
     async def run_export():
@@ -1206,7 +1287,7 @@ def passwords_status(ctx: typer.Context) -> None:
     console.print(Panel.fit("🔐 Password Sync Status", style="bold blue"))
 
     # Initialize database
-    db_path = cfg.general.data_dir / "passwords.db"
+    db_path = cfg.passwords_db_path
     db = PasswordsDB(db_path)
 
     async def get_status():
@@ -1439,7 +1520,7 @@ def passwords_sync(
         raise typer.Exit(1)
 
     # Initialize database
-    db_path = cfg.general.data_dir / "passwords.db"
+    db_path = cfg.passwords_db_path
     db = PasswordsDB(db_path)
 
     async def run_sync():
@@ -1540,7 +1621,7 @@ def passwords_reset(
             console.print("[yellow]Cancelled[/yellow]")
             raise typer.Exit(0)
 
-    db_path = cfg.general.data_dir / "passwords.db"
+    db_path = cfg.passwords_db_path
     db = PasswordsDB(db_path)
 
     async def reset():
