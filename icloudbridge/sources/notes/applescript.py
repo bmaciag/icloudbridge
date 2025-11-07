@@ -376,6 +376,21 @@ class NotesAdapter:
             return None
         return extract_note_content(entry)
 
+    async def _retry_rich_body(self, note_uuid: str) -> str | None:
+        """Retry capturing the rich body for a UUID if the cache missed."""
+
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(0.5)
+                self.clear_rich_cache()
+                await self.refresh_rich_cache()
+
+            entry = self._rich_body_for_uuid(note_uuid)
+            if entry:
+                return entry
+
+        return None
+
     async def get_notes(self, folder_name: str) -> list[AppleScriptNote]:
         """
         Get all notes from a specific folder.
@@ -417,6 +432,9 @@ class NotesAdapter:
 
                     uuid = uuid.strip()
                     rich_body = self._rich_body_for_uuid(uuid)
+                    if not rich_body:
+                        logger.info("Rich snapshot miss for %s; refreshing ripper cache", uuid)
+                        rich_body = await self._retry_rich_body(uuid)
                     if not rich_body:
                         logger.warning(
                             "Rich note body missing for %s; falling back to AppleScript HTML",

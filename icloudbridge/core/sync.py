@@ -1,5 +1,6 @@
 """Core synchronization logic for Apple Notes ↔ Markdown."""
 
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -514,7 +515,15 @@ class NotesSyncEngine:
             )
             await self.shortcuts.upsert_note(folder_name, md_note.name)
             self.notes_adapter.clear_rich_cache()
-            new_uuid = await self.notes_adapter.get_note_uuid(folder_name, md_note.name)
+
+            new_uuid = None
+            for attempt in range(3):
+                if attempt:
+                    await asyncio.sleep(0.5)
+                    self.notes_adapter.clear_rich_cache()
+                new_uuid = await self.notes_adapter.get_note_uuid(folder_name, md_note.name)
+                if new_uuid:
+                    break
             if not new_uuid:
                 raise RuntimeError(
                     f"Unable to locate note '{md_note.name}' in folder '{folder_name}' after shortcut upsert"

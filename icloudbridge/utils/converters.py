@@ -14,19 +14,6 @@ from markdown_it import MarkdownIt
 logger = logging.getLogger(__name__)
 
 CHECKLIST_LINE_RE = re.compile(r"\s*[-*]\s+\[[ xX]\]")
-BLANK_LINE_RE = re.compile(r"\n[ \t]*\n+")
-SOFT_BREAK_SKIP_RE = re.compile(
-    r"""
-    ^\s*(
-        (?:\#{1,6}\s)      |  # headings
-        (?:[-*+]\s)        |  # unordered lists
-        (?:\d+\.\s)        |  # ordered lists
-        (?:```+)           |  # fenced code
-        (?:~~~+)              # alt fenced code
-    )
-    """,
-    re.VERBOSE,
-)
 
 
 def normalize_checklists_html(html: str) -> str:
@@ -205,67 +192,6 @@ def _normalize_heading_text(text: str) -> str:
     return cleaned.casefold()
 
 
-def add_markdown_soft_breaks(markdown: str) -> str:
-    if not markdown:
-        return markdown
-
-    lines = markdown.splitlines()
-    if len(lines) == 1:
-        return markdown
-
-    result: list[str] = []
-    in_fence = False
-    fence_marker: str | None = None
-
-    for idx, line in enumerate(lines):
-        stripped = line.strip()
-        result.append(line)
-
-        fence_trigger = stripped.startswith("```") or stripped.startswith("~~~")
-        if fence_trigger:
-            marker = "```" if stripped.startswith("```") else "~~~"
-            if not in_fence:
-                in_fence = True
-                fence_marker = marker
-            elif marker == fence_marker:
-                in_fence = False
-                fence_marker = None
-            continue
-
-        if in_fence or not stripped:
-            continue
-
-        if SOFT_BREAK_SKIP_RE.match(line.lstrip()):
-            continue
-
-        if idx == len(lines) - 1:
-            continue
-
-        next_line = lines[idx + 1]
-        if not next_line.strip():
-            continue
-
-        if line.endswith("  "):
-            continue
-
-        result[-1] = f"{line.rstrip()}  "
-
-    return "\n".join(result)
-
-
-def insert_markdown_blank_line_markers(markdown: str) -> str:
-    if not markdown:
-        return markdown
-
-    def repl(match: re.Match[str]) -> str:
-        segment = match.group(0)
-        if "<br>" in segment:
-            return segment
-        return "\n\n<br>\n\n"
-
-    return BLANK_LINE_RE.sub(repl, markdown)
-
-
 def strip_leading_heading(markdown: str, note_title: str | None) -> str:
     if not markdown or not note_title:
         return markdown
@@ -290,3 +216,30 @@ def strip_leading_heading(markdown: str, note_title: str | None) -> str:
 
     trimmed = "\n".join(lines)
     return trimmed.lstrip("\n")
+
+
+def add_markdown_soft_breaks(markdown: str) -> str:
+    """Return markdown unchanged (single newlines map to single line breaks)."""
+
+    return markdown or ""
+
+
+def insert_markdown_blank_line_markers(markdown: str) -> str:
+    if not markdown:
+        return ""
+
+    return re.sub(
+        r"\n\s*\n+",
+        "\n\n<div class=\"icloudbridge-blank\"><br></div>\n\n",
+        markdown,
+    )
+
+
+def markdown_block_to_inline_html(markdown: str) -> str:
+    """Fallback helper retained for completeness (currently unused)."""
+
+    if not markdown:
+        return ""
+
+    md_parser = MarkdownIt("commonmark", {"breaks": True})
+    return md_parser.render(markdown).strip()
