@@ -7,7 +7,7 @@ from pathlib import Path
 from icloudbridge.sources.notes.applescript import AppleScriptNote, NotesAdapter
 from icloudbridge.sources.notes.markdown import MarkdownAdapter, MarkdownNote
 from icloudbridge.sources.notes.shortcuts import NotesShortcutAdapter
-from icloudbridge.utils.converters import split_markdown_segments
+from icloudbridge.utils.converters import split_markdown_segments, strip_leading_heading
 from icloudbridge.utils.db import NotesDB
 
 logger = logging.getLogger(__name__)
@@ -518,9 +518,10 @@ class NotesSyncEngine:
                     f"Unable to locate note '{md_note.name}' in folder '{folder_name}' after shortcut upsert"
                 )
 
-            segments = split_markdown_segments(prepared_note.markdown_body)
+            markdown_body = strip_leading_heading(prepared_note.markdown_body, md_note.name)
+            segments = split_markdown_segments(markdown_body)
             if not segments:
-                await self.shortcuts.append_content(folder_name, md_note.name, prepared_note.markdown_body)
+                await self.shortcuts.append_content(folder_name, md_note.name, markdown_body)
             else:
                 for segment_type, block in segments:
                     if segment_type == "checklist":

@@ -245,10 +245,10 @@ def add_markdown_soft_breaks(markdown: str) -> str:
         if not next_line.strip():
             continue
 
-        if line.endswith("  "):
+        if line.rstrip().endswith("<br>"):
             continue
 
-        result[-1] = f"{line}  "
+        result[-1] = f"{line.rstrip()}<br>"
 
     return "\n".join(result)
 
@@ -264,3 +264,29 @@ def insert_markdown_blank_line_markers(markdown: str) -> str:
         return "\n\n<br>\n\n"
 
     return BLANK_LINE_RE.sub(repl, markdown)
+
+
+def strip_leading_heading(markdown: str, note_title: str | None) -> str:
+    if not markdown or not note_title:
+        return markdown
+
+    lines = markdown.splitlines()
+    first_idx = next((idx for idx, line in enumerate(lines) if line.strip()), None)
+    if first_idx is None:
+        return markdown
+
+    line = lines[first_idx]
+    if not line.lstrip().startswith("#"):
+        return markdown
+
+    normalized_line = _normalize_heading_text(line)
+    normalized_title = _normalize_heading_text(note_title)
+    if normalized_line != normalized_title:
+        return markdown
+
+    lines.pop(first_idx)
+    if first_idx < len(lines) and not lines[first_idx].strip():
+        lines.pop(first_idx)
+
+    trimmed = "\n".join(lines)
+    return trimmed.lstrip("\n")
