@@ -14,6 +14,7 @@ from markdown_it import MarkdownIt
 logger = logging.getLogger(__name__)
 
 CHECKLIST_LINE_RE = re.compile(r"\s*[-*]\s+\[[ xX]\]")
+BLANK_LINE_RE = re.compile(r"\n[ \t]*\n+")
 SOFT_BREAK_SKIP_RE = re.compile(
     r"""
     ^\s*(
@@ -250,3 +251,16 @@ def add_markdown_soft_breaks(markdown: str) -> str:
         result[-1] = f"{line}  "
 
     return "\n".join(result)
+
+
+def insert_markdown_blank_line_markers(markdown: str) -> str:
+    if not markdown:
+        return markdown
+
+    def repl(match: re.Match[str]) -> str:
+        segment = match.group(0)
+        if "<br>" in segment:
+            return segment
+        return "\n\n<br>\n\n"
+
+    return BLANK_LINE_RE.sub(repl, markdown)
