@@ -560,6 +560,7 @@ class NotesSyncEngine:
         uuid_map: dict[str, dict[str, str | bool]] = {}
         attachment_sources: dict[str, Path] = {}
         used_names: set[str] = set()
+        inline_source_map: dict[str, str] = {}
 
         for attachment in apple_note.attachments:
             safe_name = self._unique_attachment_name(attachment.filename, used_names)
@@ -570,6 +571,9 @@ class NotesSyncEngine:
                 "is_image": attachment.is_image(),
                 "filename": safe_name,
             }
+            if attachment.original_sources:
+                for original in attachment.original_sources:
+                    inline_source_map[original] = relative_path
 
         rewritten_html = self._rewrite_attachment_sources(apple_note.body_html, uuid_map)
         rewritten_html = self._rewrite_data_uri_images(
@@ -578,6 +582,7 @@ class NotesSyncEngine:
             used_names,
             attachment_sources,
         )
+        rewritten_html = self._rewrite_inline_sources(rewritten_html, inline_source_map)
         return rewritten_html, attachment_sources
 
     def _unique_attachment_name(self, filename: str, used_names: set[str]) -> str:
@@ -636,6 +641,15 @@ class NotesSyncEngine:
         html = _apply(img_pattern, body_html)
         html = _apply(anchor_pattern, html, anchor=True)
         return html
+
+    def _rewrite_inline_sources(self, body_html: str, source_map: dict[str, str]) -> str:
+        if not source_map:
+            return body_html
+        rewritten = body_html
+        for original, replacement in source_map.items():
+            if original:
+                rewritten = rewritten.replace(original, replacement)
+        return rewritten
 
     def _rewrite_data_uri_images(
         self,

@@ -10,6 +10,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -254,7 +255,7 @@ class MarkdownAdapter:
 
             # Convert HTML to Markdown
             markdown_body = html_to_markdown(body_html, note_name)
-            markdown_content = markdown_body
+            markdown_content = self._normalize_preview_markdown(markdown_body)
             effective_metadata = metadata or {}
 
             if attachments:
@@ -325,7 +326,7 @@ class MarkdownAdapter:
 
             # Otherwise, overwrite in place
             markdown_body = html_to_markdown(body_html, note_name or file_path.stem)
-            markdown_content = markdown_body
+            markdown_content = self._normalize_preview_markdown(markdown_body)
             effective_metadata = metadata or {}
 
             if attachments:
@@ -454,6 +455,27 @@ class MarkdownAdapter:
             return None
         return note.metadata.get("attachment_slug")
 
+    def _normalize_preview_markdown(self, markdown: str) -> str:
+        pattern = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<img>[^)]+)\)(?P<link><https?://[^>]+>)")
+
+        def repl(match: re.Match[str]) -> str:
+            img = match.group("img")
+            link = match.group("link")
+            url = link.strip("<>")
+            alt = match.group("alt") or url
+            return f"![{alt}]({img}){link}"
+
+        return pattern.sub(repl, markdown)
+
+    def _strip_preview_links(self, markdown: str) -> str:
+        pattern = re.compile(r"!\[[^\]]*\]\([^\)]+\)\s*<(?P<url>https?://[^>]+)>")
+
+        def repl(match: re.Match[str]) -> str:
+            url = match.group("url")
+            return f"[{url}]({url})"
+
+        return pattern.sub(repl, markdown)
+
     async def get_note_for_apple_notes(self, file_path: Path) -> PreparedAppleNote:
         """
         Read a markdown file and prepare it for Apple Notes.
@@ -472,29 +494,30 @@ class MarkdownAdapter:
         try:
             # Read markdown note
             note = await self.read_note(file_path)
+            normalized_body = self._strip_preview_links(note.body_markdown)
 
             # Build attachment paths dict
             attachment_paths = {}
-            if note.attachments:
-                for ref in note.attachments:
-                    relative = Path(ref.lstrip("/\\"))
-                    attachment_file = (file_path.parent / relative)
-                    if attachment_file.exists():
-                        attachment_paths[ref] = attachment_file.resolve()
+            attachment_refs = extract_attachment_references(normalized_body)
+            for ref in attachment_refs:
+                relative = Path(ref.lstrip("/\\"))
+                attachment_file = (file_path.parent / relative)
+                if attachment_file.exists():
+                    attachment_paths[ref] = attachment_file.resolve()
 
-            has_checklist = contains_markdown_checklist(note.body_markdown)
+            has_checklist = contains_markdown_checklist(normalized_body)
             html_body = markdown_to_html(
-                note.body_markdown,
+                normalized_body,
                 note.name,
                 attachment_paths if attachment_paths else None,
             )
 
-            inlined_markdown = self._inline_markdown_attachments(note.body_markdown, attachment_paths)
+            inlined_markdown = self._inline_markdown_attachments(normalized_body, attachment_paths)
 
             return PreparedAppleNote(
                 name=note.name,
                 html_content=html_body,
-                markdown_body=note.body_markdown,
+                markdown_body=normalized_body,
                 markdown_with_inline_attachments=inlined_markdown,
                 has_checklist=has_checklist,
                 attachment_paths=attachment_paths,

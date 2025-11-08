@@ -140,6 +140,7 @@ class AppleNoteAttachment:
     source_path: Path
     uti: str | None = None
     conforms_to: str | None = None
+    original_sources: list[str] | None = None
 
     def is_image(self) -> bool:
         candidates = [self.uti or "", self.conforms_to or ""]
@@ -414,18 +415,39 @@ class NotesAdapter:
             attachment_uuid = str(obj.get("uuid")) if obj.get("uuid") else None
             backup_location = obj.get("backup_location") or obj.get("filepath")
             source_path = self._rich_capture.resolve_attachment_path(backup_location)
-            if not (attachment_uuid and source_path and source_path.exists()):
-                continue
-            filename = obj.get("filename") or source_path.name
-            attachments.append(
-                AppleNoteAttachment(
-                    uuid=attachment_uuid,
-                    filename=filename,
-                    source_path=source_path,
-                    uti=obj.get("type"),
-                    conforms_to=obj.get("conforms_to"),
+            if source_path and source_path.exists():
+                filename = obj.get("filename") or source_path.name
+                attachments.append(
+                    AppleNoteAttachment(
+                        uuid=attachment_uuid,
+                        filename=filename,
+                        source_path=source_path,
+                        uti=obj.get("type"),
+                        conforms_to=obj.get("conforms_to"),
+                        original_sources=None,
+                    )
                 )
-            )
+
+            for thumb in obj.get("thumbnails") or []:
+                thumb_uuid = str(thumb.get("uuid")) if thumb.get("uuid") else None
+                thumb_path = thumb.get("backup_location") or thumb.get("filepath")
+                resolved_thumb = self._rich_capture.resolve_attachment_path(thumb_path)
+                rel_thumb = thumb.get("filepath")
+                if not (thumb_uuid and resolved_thumb and resolved_thumb.exists()):
+                    continue
+                source_tokens = []
+                if rel_thumb:
+                    source_tokens.append(f"../files/{rel_thumb}")
+                attachments.append(
+                    AppleNoteAttachment(
+                        uuid=thumb_uuid,
+                        filename=Path(rel_thumb).name if rel_thumb else resolved_thumb.name,
+                        source_path=resolved_thumb,
+                        uti="public.thumbnail",
+                        conforms_to="image",
+                        original_sources=source_tokens or None,
+                    )
+                )
 
         return attachments
 
