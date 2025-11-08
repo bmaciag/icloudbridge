@@ -370,26 +370,33 @@ async def get_history(
 
 
 @router.post("/reset")
-async def reset_database(notes_db: NotesDBDep, engine: NotesSyncEngineDep):
-    """Reset notes sync database.
+async def reset_database(notes_db: NotesDBDep, engine: NotesSyncEngineDep, config: ConfigDep):
+    """Reset notes sync database and history.
 
-    Clears all note mappings from the database. This will cause
-    all notes to be re-synced on the next sync operation.
+    Clears all note mappings from the database and deletes sync history.
+    This will cause all notes to be re-synced on the next sync operation.
 
     Returns:
         Success message
     """
     try:
+        # Reset notes database
         await engine.reset_database()
         logger.info("Notes database reset successfully")
 
+        # Clear sync history for notes service
+        sync_logs_db = SyncLogsDB(config.general.data_dir / "sync_logs.db")
+        await sync_logs_db.initialize()
+        await sync_logs_db.clear_service_logs("notes")
+        logger.info("Notes sync history cleared")
+
         return {
             "status": "success",
-            "message": "Notes database reset successfully. All mappings cleared.",
+            "message": "Notes database and history reset successfully. All mappings and sync logs cleared.",
         }
     except Exception as e:
-        logger.error(f"Failed to reset notes database: {e}")
+        logger.error(f"Failed to reset notes: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reset database: {str(e)}"
+            detail=f"Failed to reset notes: {str(e)}"
         )

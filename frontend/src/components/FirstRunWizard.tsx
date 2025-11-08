@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { CheckCircle, ArrowRight, ArrowLeft, Loader2, FileText, Calendar, Key } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { CheckCircle, ArrowRight, ArrowLeft, Loader2, FileText, Calendar, Key, Download, Shield, AlertTriangle, ExternalLink } from 'lucide-react';
+import confetti from 'canvas-confetti';
 import {
   Dialog,
   DialogContent,
@@ -14,14 +15,17 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
+import { FolderBrowserDialog } from '@/components/FolderBrowserDialog';
 import { useAppStore } from '@/store/app-store';
 import apiClient from '@/lib/api-client';
-import type { AppConfig } from '@/types/api';
+import type { AppConfig, SetupVerificationResponse } from '@/types/api';
 
 const STEPS = [
   { id: 'welcome', title: 'Welcome', description: 'Get started with iCloudBridge' },
-  { id: 'icloud', title: 'iCloud', description: 'Configure your iCloud account' },
-  { id: 'services', title: 'Services', description: 'Choose services to sync' },
+  { id: 'data-storage', title: 'Data Storage', description: 'Configure data directory' },
+  { id: 'notes', title: 'Notes', description: 'Apple Notes sync settings' },
+  { id: 'reminders', title: 'Reminders', description: 'Apple Reminders sync settings' },
+  { id: 'passwords', title: 'Passwords', description: 'Password sync settings' },
   { id: 'test', title: 'Test', description: 'Test your configuration' },
   { id: 'complete', title: 'Complete', description: 'Ready to sync!' },
 ];
@@ -32,6 +36,9 @@ export default function FirstRunWizard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<any>(null);
+  const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
 
   // Form data
   const [formData, setFormData] = useState<Partial<AppConfig>>({
@@ -49,6 +56,62 @@ export default function FirstRunWizard() {
     passwords_vaultwarden_password: '',
     data_dir: '~/.icloudbridge',
   });
+
+  // Trigger confetti when reaching the complete step
+  useEffect(() => {
+    if (currentStep === STEPS.length - 1) {
+      // Fire confetti
+      const duration = 3 * 1000;
+      const animationEnd = Date.now() + duration;
+      const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 9999 };
+
+      function randomInRange(min: number, max: number) {
+        return Math.random() * (max - min) + min;
+      }
+
+      const interval: any = setInterval(function() {
+        const timeLeft = animationEnd - Date.now();
+
+        if (timeLeft <= 0) {
+          return clearInterval(interval);
+        }
+
+        const particleCount = 50 * (timeLeft / duration);
+        confetti({
+          ...defaults,
+          particleCount,
+          origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 }
+        });
+        confetti({
+          ...defaults,
+          particleCount,
+          origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 }
+        });
+      }, 250);
+
+      return () => clearInterval(interval);
+    }
+  }, [currentStep]);
+
+  // Verify setup when on Notes step
+  useEffect(() => {
+    const notesStepIndex = STEPS.findIndex(s => s.id === 'notes');
+    if (currentStep === notesStepIndex && formData.notes_enabled) {
+      loadVerification();
+    }
+  }, [currentStep, formData.notes_enabled]);
+
+  const loadVerification = async () => {
+    try {
+      setVerifying(true);
+      const result = await apiClient.verifySetup();
+      setVerification(result);
+    } catch (err) {
+      console.error('Failed to verify setup:', err);
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   const handleNext = () => {
     if (currentStep < STEPS.length - 1) {
@@ -265,13 +328,13 @@ export default function FirstRunWizard() {
           </div>
         );
 
-      case 'icloud':
+      case 'data-storage':
         return (
           <div className="space-y-4 py-4">
             <div>
-              <h3 className="text-lg font-semibold mb-2">General Configuration</h3>
+              <h3 className="text-lg font-semibold mb-2">Data Storage</h3>
               <p className="text-sm text-muted-foreground">
-                Configure data storage location
+                Configure where iCloudBridge stores its data
               </p>
             </div>
 
@@ -299,39 +362,52 @@ export default function FirstRunWizard() {
           </div>
         );
 
-      case 'services':
+      case 'notes':
         return (
           <div className="space-y-4 py-4">
-            <div>
-              <h3 className="text-lg font-semibold mb-2">Choose Services</h3>
-              <p className="text-sm text-muted-foreground">
-                Select which services you want to sync
-              </p>
+            <div className="flex items-center gap-3 mb-4">
+              <FileText className="w-8 h-8 text-primary" />
+              <div>
+                <h3 className="text-lg font-semibold">Notes Sync</h3>
+                <p className="text-sm text-muted-foreground">
+                  Sync Apple Notes with markdown files
+                </p>
+              </div>
             </div>
 
-            <div className="space-y-4">
-              {/* Notes */}
-              <div className="border rounded-lg p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <FileText className="w-5 h-5 text-primary" />
-                    <div>
-                      <p className="font-medium">Notes</p>
-                      <p className="text-sm text-muted-foreground">
-                        Sync Apple Notes with markdown files
-                      </p>
-                    </div>
-                  </div>
-                  <Switch
-                    checked={formData.notes_enabled}
-                    onCheckedChange={(checked) =>
-                      setFormData({ ...formData, notes_enabled: checked })
-                    }
-                  />
-                </div>
+            {/* Localhost Warning */}
+            {verification && !verification.is_localhost && (
+              <Alert variant="warning" className="border-orange-500 bg-orange-50">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  <strong>Remote Access Detected</strong>
+                  <p className="mt-1">
+                    Shortcut installation and permission settings must be configured on the same Mac where iCloudBridge is running.
+                    You can skip these steps for now and set them up later when accessing from that machine.
+                  </p>
+                </AlertDescription>
+              </Alert>
+            )}
 
-                {formData.notes_enabled && (
-                  <div className="space-y-2 pl-8">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 border rounded-lg">
+                <div>
+                  <Label>Enable Notes Sync</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Sync your Apple Notes to markdown
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.notes_enabled}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, notes_enabled: checked })
+                  }
+                />
+              </div>
+
+              {formData.notes_enabled && (
+                <>
+                  <div className="space-y-2">
                     <Label htmlFor="notes-folder">Notes Folder</Label>
                     <div className="flex gap-2">
                       <Input
@@ -343,210 +419,386 @@ export default function FirstRunWizard() {
                         }
                         className="flex-1"
                       />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setShowFolderBrowser(true)}
+                      >
+                        Browse
+                      </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Enter the full path to where you want to store your notes (e.g., /Users/yourname/Documents/Notes)
+                      Directory on your macOS sync machine where markdown files will be stored
                     </p>
                   </div>
-                )}
-              </div>
 
-              {/* Reminders */}
-              <div className="border rounded-lg p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Calendar className="w-5 h-5 text-primary" />
-                    <div>
-                      <p className="font-medium">Reminders</p>
-                      <p className="text-sm text-muted-foreground">
-                        Sync Apple Reminders via CalDAV
-                      </p>
+                  {/* Shortcuts Installation Section */}
+                  <div className="p-4 border rounded-lg space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Download className="w-5 h-5 text-primary" />
+                        <Label className="text-base">Install Apple Shortcuts</Label>
+                      </div>
+                      {verifying && <Loader2 className="w-4 h-4 animate-spin" />}
                     </div>
+                    <p className="text-sm text-muted-foreground">
+                      Three shortcuts are required for rich notes support (images, tables, formatting).
+                    </p>
+
+                    <div className="space-y-2">
+                      {verification?.shortcuts.map((shortcut) => (
+                        <div key={shortcut.name} className="flex items-center justify-between p-3 bg-muted rounded-md">
+                          <div className="flex items-center gap-2 flex-1">
+                            <div className="relative">
+                              <img
+                                src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23007AFF'%3E%3Cpath d='M6 6h12v2H6zm0 4h12v2H6zm0 4h12v2H6z'/%3E%3C/svg%3E"
+                                alt="Shortcuts"
+                                className="w-6 h-6"
+                              />
+                              {shortcut.installed && (
+                                <CheckCircle className="w-3 h-3 text-green-500 absolute -top-1 -right-1 bg-white rounded-full" />
+                              )}
+                            </div>
+                            <span className="text-sm font-medium">{shortcut.name}</span>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant={shortcut.installed ? "outline" : "default"}
+                            disabled={shortcut.installed}
+                            onClick={() => window.open(shortcut.url, '_blank')}
+                          >
+                            {shortcut.installed ? (
+                              <>
+                                <CheckCircle className="w-4 h-4 mr-1" />
+                                Installed
+                              </>
+                            ) : (
+                              <>
+                                <ExternalLink className="w-4 h-4 mr-1" />
+                                Install
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={loadVerification}
+                      className="w-full"
+                    >
+                      Refresh Status
+                    </Button>
                   </div>
-                  <Switch
-                    checked={formData.reminders_enabled}
-                    onCheckedChange={(checked) =>
-                      setFormData({ ...formData, reminders_enabled: checked })
-                    }
-                  />
-                </div>
 
-                {formData.reminders_enabled && (
-                  <div className="space-y-3 pl-8">
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        id="use-nextcloud"
-                        checked={formData.reminders_use_nextcloud ?? true}
-                        onChange={(e) => {
-                          const useNextcloud = e.target.checked;
-                          setFormData({
-                            ...formData,
-                            reminders_use_nextcloud: useNextcloud,
-                            // Clear URL when toggling
-                            reminders_caldav_url: '',
-                          });
-                        }}
-                        className="h-4 w-4 rounded border-gray-300"
-                      />
-                      <Label htmlFor="use-nextcloud" className="text-sm font-normal cursor-pointer">
-                        Use Nextcloud
-                      </Label>
+                  {/* Full Disk Access Section */}
+                  <div className="p-4 border rounded-lg space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Shield className="w-5 h-5 text-primary" />
+                        <Label className="text-base">Full Disk Access</Label>
+                      </div>
+                      {verification?.full_disk_access.has_access ? (
+                        <CheckCircle className="w-5 h-5 text-green-500" />
+                      ) : (
+                        <AlertTriangle className="w-5 h-5 text-orange-500" />
+                      )}
                     </div>
+                    <p className="text-sm text-muted-foreground">
+                      Python needs Full Disk Access to read your Notes database.
+                    </p>
 
-                    {formData.reminders_use_nextcloud !== false && (
+                    {verification && (
                       <div className="space-y-2">
-                        <Label htmlFor="nextcloud-url">Nextcloud URL</Label>
-                        <Input
-                          id="nextcloud-url"
-                          type="url"
-                          placeholder="https://nextcloud.example.org"
-                          value={formData.reminders_nextcloud_url || ''}
-                          onChange={(e) => {
-                            const nextcloudUrl = e.target.value;
-                            const caldavUrl = nextcloudUrl ? `${nextcloudUrl.replace(/\/$/, '')}/remote.php/dav` : '';
-                            setFormData({
-                              ...formData,
-                              reminders_nextcloud_url: nextcloudUrl,
-                              reminders_caldav_url: caldavUrl,
-                            });
-                          }}
-                        />
+                        <div className="p-3 bg-muted rounded-md text-sm">
+                          <div className="font-medium mb-1">Python Path:</div>
+                          <code className="text-xs break-all">{verification.full_disk_access.python_path}</code>
+                        </div>
+
+                        {!verification.full_disk_access.has_access && (
+                          <div className="space-y-2">
+                            <p className="text-sm">To grant Full Disk Access:</p>
+                            <ol className="text-sm text-muted-foreground space-y-1 ml-4 list-decimal">
+                              <li>Open System Settings → Privacy & Security → Full Disk Access</li>
+                              <li>Click the lock icon to make changes</li>
+                              <li>Click the + button</li>
+                              <li>Navigate to and select the Python executable above</li>
+                              <li>Restart this application</li>
+                            </ol>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                // Try to open System Preferences directly to FDA settings
+                                window.open('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles');
+                              }}
+                              className="w-full"
+                            >
+                              <ExternalLink className="w-4 h-4 mr-2" />
+                              Open System Settings
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    <div className="space-y-2">
-                      <Label htmlFor="caldav-username">Username</Label>
-                      <Input
-                        id="caldav-username"
-                        placeholder="username"
-                        value={formData.reminders_caldav_username || ''}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            reminders_caldav_username: e.target.value,
-                          })
-                        }
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="caldav-password">Password</Label>
-                      <Input
-                        id="caldav-password"
-                        type="password"
-                        placeholder="Password"
-                        value={formData.reminders_caldav_password || ''}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            reminders_caldav_password: e.target.value,
-                          })
-                        }
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        {formData.reminders_use_nextcloud !== false
-                          ? 'Your Nextcloud password or app password'
-                          : 'For iCloud, use an app-specific password from appleid.apple.com'}
-                      </p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="caldav-url">CalDAV URL</Label>
-                      <Input
-                        id="caldav-url"
-                        type="url"
-                        placeholder="https://caldav.icloud.com"
-                        value={formData.reminders_caldav_url || ''}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            reminders_caldav_url: e.target.value,
-                          })
-                        }
-                        disabled={formData.reminders_use_nextcloud !== false}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        {formData.reminders_use_nextcloud !== false
-                          ? 'Auto-filled from Nextcloud URL'
-                          : 'Full CalDAV server URL'}
-                      </p>
-                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={loadVerification}
+                      className="w-full"
+                    >
+                      Check Access
+                    </Button>
                   </div>
-                )}
-              </div>
+                </>
+              )}
+            </div>
 
-              {/* Passwords */}
-              <div className="border rounded-lg p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Key className="w-5 h-5 text-primary" />
-                    <div>
-                      <p className="font-medium">Passwords</p>
-                      <p className="text-sm text-muted-foreground">
-                        Sync passwords with VaultWarden
-                      </p>
-                    </div>
-                  </div>
-                  <Switch
-                    checked={formData.passwords_enabled}
-                    onCheckedChange={(checked) =>
-                      setFormData({ ...formData, passwords_enabled: checked })
-                    }
-                  />
-                </div>
+            <Alert>
+              <AlertDescription>
+                Notes sync stores a copy of your Apple Notes as markdown in a folder.
+                You can sync with cloud storage services like Nextcloud by pointing the notes folder to your synced directory.
+              </AlertDescription>
+            </Alert>
+          </div>
+        );
 
-                {formData.passwords_enabled && (
-                  <div className="space-y-3 pl-8">
-                    <div className="space-y-2">
-                      <Label htmlFor="vw-url">VaultWarden URL</Label>
-                      <Input
-                        id="vw-url"
-                        type="url"
-                        placeholder="https://vault.example.com"
-                        value={formData.passwords_vaultwarden_url || ''}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            passwords_vaultwarden_url: e.target.value,
-                          })
-                        }
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="vw-email">VaultWarden Email</Label>
-                      <Input
-                        id="vw-email"
-                        type="email"
-                        placeholder="your@email.com"
-                        value={formData.passwords_vaultwarden_email || ''}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            passwords_vaultwarden_email: e.target.value,
-                          })
-                        }
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="vw-password">VaultWarden Password</Label>
-                      <Input
-                        id="vw-password"
-                        type="password"
-                        placeholder="Your master password"
-                        value={formData.passwords_vaultwarden_password || ''}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            passwords_vaultwarden_password: e.target.value,
-                          })
-                        }
-                      />
-                    </div>
-                  </div>
-                )}
+      case 'reminders':
+        return (
+          <div className="space-y-4 py-4">
+            <div className="flex items-center gap-3 mb-4">
+              <Calendar className="w-8 h-8 text-primary" />
+              <div>
+                <h3 className="text-lg font-semibold">Reminders Sync</h3>
+                <p className="text-sm text-muted-foreground">
+                  Sync Apple Reminders via CalDAV
+                </p>
               </div>
             </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 border rounded-lg">
+                <div>
+                  <Label>Enable Reminders Sync</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Sync with CalDAV servers like Nextcloud or iCloud
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.reminders_enabled}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, reminders_enabled: checked })
+                  }
+                />
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="use-nextcloud"
+                  checked={formData.reminders_use_nextcloud ?? true}
+                  onChange={(e) => {
+                    const useNextcloud = e.target.checked;
+                    setFormData({
+                      ...formData,
+                      reminders_use_nextcloud: useNextcloud,
+                      reminders_caldav_url: '',
+                    });
+                  }}
+                  disabled={!formData.reminders_enabled}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="use-nextcloud" className="text-sm font-normal cursor-pointer">
+                  Use Nextcloud
+                </Label>
+              </div>
+
+              {formData.reminders_use_nextcloud !== false && (
+                <div className="space-y-2">
+                  <Label htmlFor="nextcloud-url">Nextcloud URL</Label>
+                  <Input
+                    id="nextcloud-url"
+                    type="url"
+                    placeholder="https://nextcloud.example.org"
+                    value={formData.reminders_nextcloud_url || ''}
+                    onChange={(e) => {
+                      const nextcloudUrl = e.target.value;
+                      const caldavUrl = nextcloudUrl ? `${nextcloudUrl.replace(/\/$/, '')}/remote.php/dav` : '';
+                      setFormData({
+                        ...formData,
+                        reminders_nextcloud_url: nextcloudUrl,
+                        reminders_caldav_url: caldavUrl,
+                      });
+                    }}
+                    disabled={!formData.reminders_enabled}
+                  />
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <Label htmlFor="caldav-username">Username</Label>
+                <Input
+                  id="caldav-username"
+                  placeholder="username"
+                  value={formData.reminders_caldav_username || ''}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      reminders_caldav_username: e.target.value,
+                    })
+                  }
+                  disabled={!formData.reminders_enabled}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="caldav-password">Password</Label>
+                <Input
+                  id="caldav-password"
+                  type="password"
+                  placeholder="Password"
+                  value={formData.reminders_caldav_password || ''}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      reminders_caldav_password: e.target.value,
+                    })
+                  }
+                  disabled={!formData.reminders_enabled}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {formData.reminders_use_nextcloud !== false
+                    ? 'Your Nextcloud password or app password'
+                    : 'For iCloud, use an app-specific password from appleid.apple.com'}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="caldav-url">CalDAV URL</Label>
+                <Input
+                  id="caldav-url"
+                  type="url"
+                  placeholder="https://caldav.icloud.com"
+                  value={formData.reminders_caldav_url || ''}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      reminders_caldav_url: e.target.value,
+                    })
+                  }
+                  disabled={!formData.reminders_enabled || formData.reminders_use_nextcloud !== false}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {formData.reminders_use_nextcloud !== false
+                    ? 'Auto-filled from Nextcloud URL'
+                    : 'Full CalDAV server URL'}
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'passwords':
+        return (
+          <div className="space-y-4 py-4">
+            <div className="flex items-center gap-3 mb-4">
+              <Key className="w-8 h-8 text-primary" />
+              <div>
+                <h3 className="text-lg font-semibold">Passwords Sync</h3>
+                <p className="text-sm text-muted-foreground">
+                  Sync passwords with Bitwarden or Vaultwarden
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-4 border rounded-lg">
+                <div>
+                  <Label>Enable Passwords Sync</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Sync passwords with Bitwarden or Vaultwarden
+                  </p>
+                </div>
+                <Switch
+                  checked={formData.passwords_enabled}
+                  onCheckedChange={(checked) =>
+                    setFormData({ ...formData, passwords_enabled: checked })
+                  }
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="vw-url">Bitwarden/Vaultwarden URL</Label>
+                <Input
+                  id="vw-url"
+                  type="url"
+                  placeholder="https://vault.bitwarden.com"
+                  value={formData.passwords_vaultwarden_url || ''}
+                  onChange={(e) => {
+                    const url = e.target.value;
+                    setFormData({
+                      ...formData,
+                      passwords_vaultwarden_url: url,
+                    });
+                  }}
+                  onFocus={(e) => {
+                    // Show datalist suggestions
+                    e.target.setAttribute('list', 'bitwarden-urls');
+                  }}
+                  disabled={!formData.passwords_enabled}
+                />
+                <datalist id="bitwarden-urls">
+                  <option value="https://vault.bitwarden.com" />
+                  <option value="https://vault.bitwarden.eu" />
+                </datalist>
+                <p className="text-xs text-muted-foreground">
+                  Use vault.bitwarden.com, vault.bitwarden.eu, or your self-hosted server URL
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="vw-email">Bitwarden/Vaultwarden Email</Label>
+                <Input
+                  id="vw-email"
+                  type="email"
+                  placeholder="your@email.com"
+                  value={formData.passwords_vaultwarden_email || ''}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      passwords_vaultwarden_email: e.target.value,
+                    })
+                  }
+                  disabled={!formData.passwords_enabled}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="vw-password">Bitwarden/Vaultwarden Password</Label>
+                <Input
+                  id="vw-password"
+                  type="password"
+                  placeholder="Your master password"
+                  value={formData.passwords_vaultwarden_password || ''}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      passwords_vaultwarden_password: e.target.value,
+                    })
+                  }
+                  disabled={!formData.passwords_enabled}
+                />
+              </div>
+            </div>
+
+            <Alert>
+              <AlertDescription>
+                iCloudBridge does not store your passwords - these will be stored in your Bitwarden or Vaultwarden vault.
+              </AlertDescription>
+            </Alert>
           </div>
         );
 
@@ -680,6 +932,7 @@ export default function FirstRunWizard() {
   if (!isFirstRun) return null;
 
   return (
+    <>
     <Dialog open={isFirstRun} onOpenChange={() => {}}>
       <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto" onInteractOutside={(e) => e.preventDefault()}>
         <DialogHeader>
@@ -760,5 +1013,15 @@ export default function FirstRunWizard() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <FolderBrowserDialog
+      open={showFolderBrowser}
+      onOpenChange={setShowFolderBrowser}
+      onSelect={(path) => setFormData({ ...formData, notes_remote_folder: path })}
+      initialPath={formData.notes_remote_folder || '~'}
+      title="Select Notes Folder"
+      description="Choose where to store your Notes as markdown files"
+    />
+    </>
   );
 }

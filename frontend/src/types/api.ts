@@ -206,6 +206,47 @@ export interface ErrorMessage {
   error_type: 'error' | 'warning';
 }
 
+// Setup Verification
+export interface ShortcutStatus {
+  name: string;
+  installed: boolean;
+  url: string;
+}
+
+export interface FullDiskAccessStatus {
+  has_access: boolean;
+  python_path: string;
+  notes_db_path?: string;
+}
+
+export interface NotesFolderStatus {
+  exists: boolean;
+  writable: boolean;
+  path?: string;
+}
+
+export interface SetupVerificationResponse {
+  shortcuts: ShortcutStatus[];
+  full_disk_access: FullDiskAccessStatus;
+  notes_folder: NotesFolderStatus;
+  is_localhost: boolean;
+  all_ready: boolean;
+}
+
+// Folder Browser
+export interface FolderItem {
+  name: string;
+  path: string;
+}
+
+export interface BrowseFoldersResponse {
+  current_path: string;
+  parent_path: string | null;
+  folders: FolderItem[];
+  is_home: boolean;
+  error?: string;
+}
+
 // API Error Response
 export interface APIError {
   detail: string;

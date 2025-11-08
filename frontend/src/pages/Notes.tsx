@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { FileText, RefreshCw, Upload, Download, Trash2 } from 'lucide-react';
+import { FileText, RefreshCw, Upload, Download, Trash2, AlertTriangle, ExternalLink } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import apiClient from '@/lib/api-client';
 import { useSyncStore } from '@/store/sync-store';
-import type { NotesFolder, SyncLog } from '@/types/api';
+import type { NotesFolder, SyncLog, SetupVerificationResponse } from '@/types/api';
 
 export default function Notes() {
   const [folders, setFolders] = useState<NotesFolder[]>([]);
@@ -18,12 +19,14 @@ export default function Notes() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [mode, setMode] = useState<'import' | 'export' | 'bidirectional'>('bidirectional');
+  const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
 
   const { activeSyncs } = useSyncStore();
   const activeSync = activeSyncs.get('notes');
 
   useEffect(() => {
     loadData();
+    loadVerification();
   }, []);
 
   const loadData = async () => {
@@ -39,6 +42,15 @@ export default function Notes() {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadVerification = async () => {
+    try {
+      const result = await apiClient.verifySetup();
+      setVerification(result);
+    } catch (err) {
+      console.error('Failed to load verification:', err);
     }
   };
 
@@ -110,6 +122,46 @@ export default function Notes() {
         <Alert variant="success">
           <AlertTitle>Success</AlertTitle>
           <AlertDescription>{success}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Setup Verification Warning */}
+      {verification && !verification.all_ready && (
+        <Alert variant="warning" className="border-orange-500 bg-orange-50">
+          <AlertTriangle className="h-4 w-4" />
+          <div>
+            <AlertTitle>Setup Incomplete</AlertTitle>
+            <AlertDescription>
+              <p className="mb-2">
+                Your Notes sync setup needs attention:
+              </p>
+              <ul className="list-disc list-inside space-y-1 mb-3">
+                {verification.shortcuts.some(s => !s.installed) && (
+                  <li>
+                    {verification.shortcuts.filter(s => !s.installed).length} of {verification.shortcuts.length} required shortcuts not installed
+                  </li>
+                )}
+                {!verification.full_disk_access.has_access && (
+                  <li>Python does not have Full Disk Access</li>
+                )}
+                {verification.notes_folder.path && !verification.notes_folder.exists && (
+                  <li>Notes folder does not exist: {verification.notes_folder.path}</li>
+                )}
+                {verification.notes_folder.exists && !verification.notes_folder.writable && (
+                  <li>Notes folder is not writable</li>
+                )}
+              </ul>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={loadVerification}
+                className="bg-white"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Check Again
+              </Button>
+            </AlertDescription>
+          </div>
         </Alert>
       )}
 

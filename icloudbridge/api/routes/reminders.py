@@ -452,28 +452,45 @@ async def get_history(
 
 
 @router.post("/reset")
-async def reset_database(engine: RemindersSyncEngineDep):
-    """Reset reminders sync database.
+async def reset_database(engine: RemindersSyncEngineDep, config: ConfigDep):
+    """Reset reminders sync database, history, and keychain password.
 
-    Clears all reminder mappings from the database. This will cause
-    all reminders to be re-synced on the next sync operation.
+    Clears all reminder mappings from the database, deletes sync history,
+    and removes CalDAV password from keychain. This will cause all reminders
+    to be re-synced on the next sync operation.
 
     Returns:
         Success message
     """
     try:
+        # Reset reminders database
         await engine.reset_database()
         logger.info("Reminders database reset successfully")
 
+        # Clear sync history for reminders service
+        sync_logs_db = SyncLogsDB(config.general.data_dir / "sync_logs.db")
+        await sync_logs_db.initialize()
+        await sync_logs_db.clear_service_logs("reminders")
+        logger.info("Reminders sync history cleared")
+
+        # Delete CalDAV password from keychain if username exists
+        if config.reminders.caldav_username:
+            try:
+                credential_store = CredentialStore()
+                credential_store.delete_caldav_password(config.reminders.caldav_username)
+                logger.info(f"Deleted CalDAV password for: {config.reminders.caldav_username}")
+            except Exception as e:
+                logger.warning(f"Failed to delete CalDAV password: {e}")
+
         return {
             "status": "success",
-            "message": "Reminders database reset successfully. All mappings cleared.",
+            "message": "Reminders database, history, and keychain password reset successfully.",
         }
     except Exception as e:
-        logger.error(f"Failed to reset reminders database: {e}")
+        logger.error(f"Failed to reset reminders: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reset database: {str(e)}"
+            detail=f"Failed to reset reminders: {str(e)}"
         )
 
 

@@ -433,27 +433,44 @@ async def get_history(
 
 
 @router.post("/reset")
-async def reset_database(passwords_db: PasswordsDBDep):
-    """Reset passwords sync database.
+async def reset_database(passwords_db: PasswordsDBDep, config: ConfigDep):
+    """Reset passwords sync database, history, and keychain credentials.
 
-    Clears all password entries from the database.
+    Clears all password entries from the database, deletes sync history,
+    and removes Vaultwarden credentials from keychain.
 
     Returns:
         Success message
     """
     try:
+        # Reset passwords database
         await passwords_db.clear_all_entries()
         logger.info("Passwords database reset successfully")
 
+        # Clear sync history for passwords service
+        sync_logs_db = SyncLogsDB(config.general.data_dir / "sync_logs.db")
+        await sync_logs_db.initialize()
+        await sync_logs_db.clear_service_logs("passwords")
+        logger.info("Passwords sync history cleared")
+
+        # Delete Vaultwarden credentials from keychain if email exists
+        if config.passwords.vaultwarden_email:
+            try:
+                credential_store = CredentialStore()
+                credential_store.delete_vaultwarden_credentials(config.passwords.vaultwarden_email)
+                logger.info(f"Deleted Vaultwarden credentials for: {config.passwords.vaultwarden_email}")
+            except Exception as e:
+                logger.warning(f"Failed to delete Vaultwarden credentials: {e}")
+
         return {
             "status": "success",
-            "message": "Passwords database reset successfully. All entries cleared.",
+            "message": "Passwords database, history, and keychain credentials reset successfully.",
         }
     except Exception as e:
-        logger.error(f"Failed to reset passwords database: {e}")
+        logger.error(f"Failed to reset passwords: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reset database: {str(e)}"
+            detail=f"Failed to reset passwords: {str(e)}"
         )
 
 

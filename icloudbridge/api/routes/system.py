@@ -1,11 +1,21 @@
 """System and utility endpoints."""
 
 import logging
+import os
 import platform
+import subprocess
+import sys
+from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from icloudbridge.api.dependencies import ConfigDep
+from icloudbridge.api.models import (
+    SetupVerificationResponse,
+    ShortcutStatus,
+    FullDiskAccessStatus,
+    NotesFolderStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,3 +68,207 @@ async def get_system_info(config: ConfigDep) -> dict:
         "python_version": platform.python_version(),
         "data_dir": str(config.general.data_dir),
     }
+
+
+@router.get("/verify", response_model=SetupVerificationResponse)
+async def verify_setup(request: Request, config: ConfigDep) -> SetupVerificationResponse:
+    """Verify system setup and requirements for Notes sync.
+
+    Checks:
+    - Required Apple Shortcuts installation status
+    - Full Disk Access for Python interpreter
+    - Notes folder existence and writability
+    - Whether request is from localhost
+
+    Returns:
+        Complete setup verification status
+    """
+    # Define required shortcuts
+    # Note: "shortcut_name" is the actual name returned by `shortcuts list`
+    # "display_name" is the user-friendly name shown in the UI
+    REQUIRED_SHORTCUTS = [
+        {
+            "shortcut_name": "iCloudBridge_Upsert_Note",
+            "display_name": "iCloudBridge - Create Note",
+            "url": "https://www.icloud.com/shortcuts/a7f2bb8d95094b1aafc8828c8e5a3633",
+        },
+        {
+            "shortcut_name": "iCloudBridge_Append_Content_To_Note",
+            "display_name": "iCloudBridge - Add Note Content",
+            "url": "https://www.icloud.com/shortcuts/9360561e13714bfb9183c76e732a2b4d",
+        },
+        {
+            "shortcut_name": "iCloudBridge_Append_Checklist_To_Note",
+            "display_name": "iCloudBridge - Note Todo Manager",
+            "url": "https://www.icloud.com/shortcuts/e98b25e5519d44138a647e6db7b4782c",
+        },
+    ]
+
+    # Check installed shortcuts
+    installed_shortcuts = set()
+    try:
+        result = subprocess.run(
+            ["shortcuts", "list"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            installed_shortcuts = set(line.strip() for line in result.stdout.splitlines())
+            logger.info(f"Found {len(installed_shortcuts)} installed shortcuts")
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        logger.warning(f"Failed to list shortcuts: {e}")
+
+    shortcut_statuses = [
+        ShortcutStatus(
+            name=shortcut["display_name"],
+            installed=shortcut["shortcut_name"] in installed_shortcuts,
+            url=shortcut["url"],
+        )
+        for shortcut in REQUIRED_SHORTCUTS
+    ]
+
+    # Check Full Disk Access by trying to read Notes database
+    python_path = sys.executable
+    notes_db_path = Path.home() / "Library/Group Containers/group.com.apple.notes/NoteStore.sqlite"
+    has_fda = False
+
+    try:
+        if notes_db_path.exists():
+            # Try to read the file - will fail without FDA
+            with open(notes_db_path, "rb") as f:
+                f.read(1)  # Read just 1 byte
+            has_fda = True
+            logger.info("Full Disk Access verified - can read Notes database")
+        else:
+            logger.warning(f"Notes database not found at: {notes_db_path}")
+    except (PermissionError, OSError) as e:
+        logger.warning(f"No Full Disk Access - cannot read Notes database: {e}")
+        has_fda = False
+
+    fda_status = FullDiskAccessStatus(
+        has_access=has_fda,
+        python_path=python_path,
+        notes_db_path=str(notes_db_path) if notes_db_path.exists() else None,
+    )
+
+    # Check notes folder
+    notes_folder_path = config.notes.remote_folder
+    folder_exists = False
+    folder_writable = False
+
+    if notes_folder_path:
+        notes_folder_path = Path(notes_folder_path).expanduser()
+        folder_exists = notes_folder_path.exists()
+
+        if folder_exists:
+            # Test writability
+            try:
+                test_file = notes_folder_path / ".icloudbridge_write_test"
+                test_file.touch()
+                test_file.unlink()
+                folder_writable = True
+                logger.info(f"Notes folder is writable: {notes_folder_path}")
+            except (PermissionError, OSError) as e:
+                logger.warning(f"Notes folder not writable: {e}")
+                folder_writable = False
+
+    notes_folder_status = NotesFolderStatus(
+        exists=folder_exists,
+        writable=folder_writable,
+        path=str(notes_folder_path) if notes_folder_path else None,
+    )
+
+    # Check if request is from localhost
+    client_host = request.client.host if request.client else None
+    is_localhost = client_host in ("127.0.0.1", "::1", "localhost") if client_host else False
+
+    # Determine if all requirements are met
+    all_shortcuts_installed = all(s.installed for s in shortcut_statuses)
+    all_ready = (
+        all_shortcuts_installed
+        and has_fda
+        and folder_exists
+        and folder_writable
+    )
+
+    return SetupVerificationResponse(
+        shortcuts=shortcut_statuses,
+        full_disk_access=fda_status,
+        notes_folder=notes_folder_status,
+        is_localhost=is_localhost,
+        all_ready=all_ready,
+    )
+
+
+@router.get("/browse-folders")
+async def browse_folders(path: str = "~") -> dict:
+    """Browse server filesystem for folder selection.
+
+    Args:
+        path: Path to browse (defaults to user home directory)
+
+    Returns:
+        Dictionary containing current path, parent path, and list of subdirectories
+
+    Security:
+        - Only allows browsing within user's home directory
+        - Does not expose hidden system directories
+        - Returns only directories, not files
+    """
+    try:
+        # Expand and resolve the path
+        browse_path = Path(path).expanduser().resolve()
+        home_path = Path.home().resolve()
+
+        # Security check: ensure path is within user's home directory
+        try:
+            browse_path.relative_to(home_path)
+        except ValueError:
+            # Path is outside home directory, default to home
+            logger.warning(f"Attempted to browse outside home directory: {browse_path}")
+            browse_path = home_path
+
+        # Check if path exists and is a directory
+        if not browse_path.exists() or not browse_path.is_dir():
+            browse_path = home_path
+
+        # Get parent directory (or None if at home)
+        parent_path = None
+        if browse_path != home_path:
+            parent_path = str(browse_path.parent)
+
+        # List subdirectories (excluding hidden directories)
+        folders = []
+        try:
+            for item in sorted(browse_path.iterdir()):
+                # Skip hidden directories (starting with .)
+                if item.name.startswith('.'):
+                    continue
+                # Only include directories
+                if item.is_dir():
+                    folders.append({
+                        "name": item.name,
+                        "path": str(item),
+                    })
+        except PermissionError:
+            logger.warning(f"Permission denied browsing: {browse_path}")
+
+        return {
+            "current_path": str(browse_path),
+            "parent_path": parent_path,
+            "folders": folders,
+            "is_home": browse_path == home_path,
+        }
+
+    except Exception as e:
+        logger.error(f"Error browsing folders: {e}")
+        # Return home directory as fallback
+        home_path = Path.home()
+        return {
+            "current_path": str(home_path),
+            "parent_path": None,
+            "folders": [],
+            "is_home": True,
+            "error": str(e),
+        }

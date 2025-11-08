@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { RefreshCw, Activity, Calendar, Key, FileText } from 'lucide-react';
+import { RefreshCw, Activity, Calendar, Key, FileText, AlertTriangle, ExternalLink } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -7,16 +8,19 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useAppStore } from '@/store/app-store';
 import { useSyncStore } from '@/store/sync-store';
 import apiClient from '@/lib/api-client';
-import type { StatusResponse } from '@/types/api';
+import type { StatusResponse, SetupVerificationResponse } from '@/types/api';
 
 export default function Dashboard() {
   const { status, setStatus, wsConnected } = useAppStore();
   const { activeSyncs, logs } = useSyncStore();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
+  const [showSetupWarning, setShowSetupWarning] = useState(false);
 
   useEffect(() => {
     loadStatus();
+    loadVerification();
     // Refresh status every 30 seconds
     const interval = setInterval(loadStatus, 30000);
     return () => clearInterval(interval);
@@ -32,6 +36,19 @@ export default function Dashboard() {
       setError(err instanceof Error ? err.message : 'Failed to load status');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadVerification = async () => {
+    try {
+      const result = await apiClient.verifySetup();
+      setVerification(result);
+      // Show warning if notes are enabled but setup is incomplete
+      if (status?.notes?.enabled && !result.all_ready) {
+        setShowSetupWarning(true);
+      }
+    } catch (err) {
+      console.error('Failed to load verification:', err);
     }
   };
 
@@ -96,6 +113,57 @@ export default function Dashboard() {
         <Alert variant="destructive">
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Setup Verification Warning */}
+      {showSetupWarning && verification && status?.notes?.enabled && (
+        <Alert variant="warning" className="border-orange-500 bg-orange-50">
+          <AlertTriangle className="h-4 w-4" />
+          <div>
+            <AlertTitle>Notes Setup Incomplete</AlertTitle>
+            <AlertDescription>
+              <p className="mb-2">
+                Your Notes sync setup is incomplete. The following items need attention:
+              </p>
+              <ul className="list-disc list-inside space-y-1 mb-3">
+                {verification.shortcuts.some(s => !s.installed) && (
+                  <li>
+                    {verification.shortcuts.filter(s => !s.installed).length} of {verification.shortcuts.length} required shortcuts not installed
+                  </li>
+                )}
+                {!verification.full_disk_access.has_access && (
+                  <li>Python does not have Full Disk Access</li>
+                )}
+                {verification.notes_folder.path && !verification.notes_folder.exists && (
+                  <li>Notes folder does not exist: {verification.notes_folder.path}</li>
+                )}
+                {verification.notes_folder.exists && !verification.notes_folder.writable && (
+                  <li>Notes folder is not writable</li>
+                )}
+              </ul>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  asChild
+                  className="bg-white"
+                >
+                  <Link to="/settings">
+                    <ExternalLink className="w-4 h-4 mr-2" />
+                    Go to Settings
+                  </Link>
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowSetupWarning(false)}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            </AlertDescription>
+          </div>
         </Alert>
       )}
 

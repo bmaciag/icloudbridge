@@ -228,3 +228,37 @@ class SettingUpdate(BaseModel):
 
     key: str
     value: str
+
+
+class ShortcutStatus(BaseModel):
+    """Status of a required shortcut."""
+
+    name: str
+    installed: bool
+    url: str
+
+
+class FullDiskAccessStatus(BaseModel):
+    """Status of Full Disk Access for Python."""
+
+    has_access: bool
+    python_path: str
+    notes_db_path: str | None = None
+
+
+class NotesFolderStatus(BaseModel):
+    """Status of the notes folder."""
+
+    exists: bool
+    writable: bool
+    path: str | None = None
+
+
+class SetupVerificationResponse(BaseModel):
+    """Response model for setup verification."""
+
+    shortcuts: list[ShortcutStatus]
+    full_disk_access: FullDiskAccessStatus
+    notes_folder: NotesFolderStatus
+    is_localhost: bool
+    all_ready: bool
