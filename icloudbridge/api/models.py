@@ -137,10 +137,30 @@ class ErrorResponse(BaseModel):
 class NotesSyncRequest(BaseModel):
     """Request model for notes sync."""
 
-    folder: str | None = None
-    dry_run: bool = False
-    skip_deletions: bool = False
-    deletion_threshold: int = 5
+    folder: str | None = Field(
+        default=None,
+        description="Specific folder to sync, or None to sync all folders"
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="Preview changes without applying them"
+    )
+    skip_deletions: bool = Field(
+        default=False,
+        description="Skip all deletion operations"
+    )
+    deletion_threshold: int = Field(
+        default=5,
+        description="Max deletions before confirmation (-1 to disable)"
+    )
+    rich_notes_export: bool = Field(
+        default=False,
+        description="Export read-only rich notes snapshot after sync"
+    )
+    use_shortcuts: bool | None = Field(
+        default=None,
+        description="Override shortcut pipeline preference (None = use config default, True/False = override)"
+    )
 
 
 class RemindersSyncRequest(BaseModel):

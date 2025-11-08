@@ -116,6 +116,7 @@ def create_app() -> FastAPI:
         reminders,
         schedules,
         settings,
+        system,
     )
     app.include_router(health.router, prefix="/api", tags=["Health"])
     app.include_router(config.router, prefix="/api/config", tags=["Configuration"])
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(passwords.router, prefix="/api/passwords", tags=["Passwords"])
     app.include_router(schedules.router, prefix="/api/schedules", tags=["Schedules"])
     app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
+    app.include_router(system.router, prefix="/api/system", tags=["System"])
 
     # WebSocket endpoint
     from icloudbridge.api.websocket import websocket_endpoint

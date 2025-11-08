@@ -255,7 +255,8 @@ class MarkdownAdapter:
 
             # Convert HTML to Markdown
             markdown_body = html_to_markdown(body_html, note_name)
-            markdown_content = self._normalize_preview_markdown(markdown_body)
+            markdown_body = self._normalize_preview_markdown(markdown_body)
+            markdown_content = self._normalize_shortcut_checkmarks(markdown_body)
             effective_metadata = metadata or {}
 
             if attachments:
@@ -326,7 +327,8 @@ class MarkdownAdapter:
 
             # Otherwise, overwrite in place
             markdown_body = html_to_markdown(body_html, note_name or file_path.stem)
-            markdown_content = self._normalize_preview_markdown(markdown_body)
+            markdown_body = self._normalize_preview_markdown(markdown_body)
+            markdown_content = self._normalize_shortcut_checkmarks(markdown_body)
             effective_metadata = metadata or {}
 
             if attachments:
@@ -466,6 +468,16 @@ class MarkdownAdapter:
             return f"![{alt}]({img}){link}"
 
         return pattern.sub(repl, markdown)
+
+    def _normalize_shortcut_checkmarks(self, markdown: str) -> str:
+        replacements = {
+            "- [x] ✅": "- [x]",
+            "- [ ] ✅": "- [x]",
+        }
+        normalized = markdown
+        for old, new in replacements.items():
+            normalized = normalized.replace(old, new)
+        return normalized
 
     def _strip_preview_links(self, markdown: str) -> str:
         pattern = re.compile(r"!\[[^\]]*\]\([^\)]+\)\s*<(?P<url>https?://[^>]+)>")

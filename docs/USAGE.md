@@ -203,6 +203,89 @@ icloudbridge notes reset [--yes]
 
 ---
 
+### Rich Notes Export
+
+The `--rich-notes` flag exports a read-only snapshot of your Apple Notes with rich formatting preserved.
+
+**When to use**:
+- Creating backups with full formatting
+- Viewing notes outside of Apple Notes app
+- Archiving notes with images and tables
+- Sharing formatted notes (read-only)
+
+**How it works**:
+1. After sync completes, exports all notes to `RichNotes/` folder
+2. Uses Ruby-based ripper to extract canonical HTML from NoteStore.sqlite
+3. Converts to enhanced Markdown with formatting preserved
+4. Organizes by folder structure matching Apple Notes
+
+**Example**:
+```bash
+# Export rich notes after sync
+icloudbridge notes sync --rich-notes
+
+# Output structure:
+# ~/Nextcloud/Notes/
+# ├── Personal/              (bidirectional sync)
+# │   ├── shopping-list.md
+# │   └── ideas.md
+# └── RichNotes/             (read-only export)
+#     └── Personal/
+#         ├── shopping-list.md   (rich formatting)
+#         └── ideas.md           (with tables, images)
+```
+
+**What's included in Rich Notes**:
+- Full HTML formatting (bold, italic, underline)
+- Tables and lists
+- Embedded images (as base64 or links)
+- Checklists (native Apple Notes format)
+- Links with preview URLs
+
+**Note**: RichNotes are read-only. Changes should be made in the regular sync folders, not in RichNotes/.
+
+---
+
+### Attachment Handling
+
+When notes contain attachments (images, PDFs, etc.), iCloudBridge organizes them with metadata:
+
+**Structure**:
+```
+~/Nextcloud/Notes/
+├── my-note.md                    # Main note content
+├── .attachments.my-note/         # Hidden attachments folder
+│   ├── image1.jpg
+│   └── document.pdf
+└── .my-note.md.meta.json        # Hidden metadata (sync state)
+```
+
+**Metadata file** (`.my-note.md.meta.json`):
+```json
+{
+  "uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "folder_uuid": "660e9500-e29b-41d4-a716-446655440001",
+  "last_modified": "2025-11-08T15:30:00Z",
+  "attachments": [
+    {
+      "filename": "image1.jpg",
+      "type": "image/jpeg",
+      "size": 102400
+    }
+  ]
+}
+```
+
+**Why sidecar files?**
+- Preserves sync mappings (UUID to path)
+- Tracks modification times
+- Maintains attachment relationships
+- Hidden by default (`.` prefix)
+
+**Note**: Don't manually edit or delete `.meta.json` files unless resetting sync state.
+
+---
+
 ## Reminders Synchronization
 
 Bidirectional sync between Apple Reminders and CalDAV (NextCloud, etc.).
@@ -608,7 +691,368 @@ icloudbridge passwords-reset [--yes]
 
 ---
 
+## API Server
+
+iCloudBridge includes a FastAPI-based REST API for programmatic access to all sync operations.
+
+### `serve`
+
+Start the FastAPI server.
+
+```bash
+icloudbridge serve [OPTIONS]
+```
+
+**Options**:
+
+| Option | Type | Description | Default |
+|--------|------|-------------|---------|
+| `--host` | TEXT | Bind host address | 127.0.0.1 |
+| `--port` | INT | Bind port | 8000 |
+| `--reload` | flag | Enable auto-reload (development) | false |
+| `--background` | flag | Run as daemon | false |
+
+**Examples**:
+```bash
+# Start server (foreground)
+icloudbridge serve
+
+# Start on custom port
+icloudbridge serve --port 9000
+
+# Development mode with auto-reload
+icloudbridge serve --reload
+
+# Run as background daemon
+icloudbridge serve --background
+```
+
+**Output**:
+```
+INFO:     Started server process [12345]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+```
+
+**API Documentation**: Visit `http://localhost:8000/docs` for interactive Swagger UI.
+
+---
+
+### Service Management
+
+Install iCloudBridge as a macOS LaunchAgent for automatic startup.
+
+#### `install-service`
+
+Install as a system service.
+
+```bash
+icloudbridge install-service [OPTIONS]
+```
+
+**Options**:
+- `--port` - Server port (default: 8000)
+- `--start-on-boot` - Auto-start on login
+
+**Example**:
+```bash
+# Install service
+icloudbridge install-service --start-on-boot
+
+# Install on custom port
+icloudbridge install-service --port 9000 --start-on-boot
+```
+
+**Output**:
+```
+✅ Service installed successfully
+   LaunchAgent: ~/Library/LaunchAgents/com.taskbridge.icloudbridge.plist
+   Port: 8000
+   Auto-start: Enabled
+
+💡 Manage service:
+   icloudbridge service start
+   icloudbridge service stop
+   icloudbridge service status
+```
+
+#### `uninstall-service`
+
+Remove the LaunchAgent service.
+
+```bash
+icloudbridge uninstall-service
+```
+
+#### `service status`
+
+Check if the service is running.
+
+```bash
+icloudbridge service status
+```
+
+**Output**:
+```
+🟢 Service is running
+   PID: 12345
+   Port: 8000
+   Uptime: 2 hours
+```
+
+#### `service start`
+
+Start the service.
+
+```bash
+icloudbridge service start
+```
+
+#### `service stop`
+
+Stop the service.
+
+```bash
+icloudbridge service stop
+```
+
+#### `service restart`
+
+Restart the service.
+
+```bash
+icloudbridge service restart
+```
+
+---
+
+### API Usage Examples
+
+The API provides programmatic access to all CLI functionality. All endpoints are documented at `/docs`.
+
+#### Notes Sync via API
+
+**Sync specific folder:**
+```bash
+curl -X POST http://localhost:8000/api/notes/sync \
+  -H "Content-Type: application/json" \
+  -d '{
+    "folder": "Personal",
+    "dry_run": false,
+    "skip_deletions": false,
+    "deletion_threshold": 5
+  }'
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Sync completed successfully",
+  "created": 5,
+  "updated": 12,
+  "deleted": 2,
+  "unchanged": 135,
+  "duration": 3.2
+}
+```
+
+**Sync all folders:**
+```bash
+curl -X POST http://localhost:8000/api/notes/sync \
+  -H "Content-Type: application/json" \
+  -d '{"folder": null}'
+```
+
+**List folders:**
+```bash
+curl http://localhost:8000/api/notes/folders
+```
+
+**Get sync status:**
+```bash
+curl http://localhost:8000/api/notes/status
+```
+
+**Get sync history:**
+```bash
+curl http://localhost:8000/api/notes/history?limit=10
+```
+
+#### Reminders Sync via API
+
+**Auto-sync all calendars:**
+```bash
+curl -X POST http://localhost:8000/api/reminders/sync \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auto": true,
+    "dry_run": false
+  }'
+```
+
+**Sync specific calendar pair:**
+```bash
+curl -X POST http://localhost:8000/api/reminders/sync \
+  -H "Content-Type: application/json" \
+  -d '{
+    "apple_calendar": "Work",
+    "caldav_calendar": "work-tasks",
+    "auto": false
+  }'
+```
+
+**Set CalDAV password:**
+```bash
+curl -X POST http://localhost:8000/api/reminders/password \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "myuser",
+    "password": "mypassword"
+  }'
+```
+
+#### Passwords Sync via API
+
+**Import Apple CSV:**
+```bash
+curl -X POST http://localhost:8000/api/passwords/import/apple \
+  -F "file=@passwords.csv"
+```
+
+**Full auto-sync with VaultWarden:**
+```bash
+curl -X POST http://localhost:8000/api/passwords/sync \
+  -F "apple_csv=@passwords.csv"
+```
+
+**Get sync status:**
+```bash
+curl http://localhost:8000/api/passwords/status
+```
+
+#### Scheduling
+
+The API includes a scheduler for automated syncs.
+
+**Create schedule:**
+```bash
+curl -X POST http://localhost:8000/api/schedules \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Daily Notes Sync",
+    "service": "notes",
+    "cron": "0 */6 * * *",
+    "enabled": true,
+    "config": {
+      "skip_deletions": false,
+      "deletion_threshold": 5
+    }
+  }'
+```
+
+**List schedules:**
+```bash
+curl http://localhost:8000/api/schedules
+```
+
+**Trigger schedule manually:**
+```bash
+curl -X POST http://localhost:8000/api/schedules/{id}/run
+```
+
+**Toggle schedule:**
+```bash
+curl -X PUT http://localhost:8000/api/schedules/{id}/toggle
+```
+
+#### Configuration Management
+
+**Get current config:**
+```bash
+curl http://localhost:8000/api/config
+```
+
+**Update config:**
+```bash
+curl -X PUT http://localhost:8000/api/config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "notes": {
+      "enabled": true,
+      "remote_folder": "~/Nextcloud/Notes"
+    }
+  }'
+```
+
+**Test CalDAV connection:**
+```bash
+curl http://localhost:8000/api/config/test-connection?service=reminders
+```
+
+#### WebSocket Real-Time Updates
+
+Connect to WebSocket for real-time sync progress:
+
+```javascript
+const ws = new WebSocket('ws://localhost:8000/api/ws');
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log('Sync update:', data);
+};
+```
+
+**Python example:**
+```python
+import requests
+import websockets
+import asyncio
+
+# Trigger sync
+response = requests.post('http://localhost:8000/api/notes/sync', json={
+    'folder': 'Personal'
+})
+
+# Monitor progress via WebSocket
+async with websockets.connect('ws://localhost:8000/api/ws') as ws:
+    while True:
+        message = await ws.recv()
+        print(f'Update: {message}')
+```
+
+---
+
 ## Utility Commands
+
+### `db-paths`
+
+Show database file locations.
+
+```bash
+icloudbridge db-paths
+```
+
+**Output**:
+```
+📂 Database Locations:
+
+Notes DB:
+  Path: ~/.icloudbridge/notes.db
+  Size: 1.2 MB
+  Exists: ✓
+
+Reminders DB:
+  Path: ~/.icloudbridge/reminders.db
+  Size: 456 KB
+  Exists: ✓
+
+Passwords DB:
+  Path: ~/.icloudbridge/passwords.db
+  Size: 2.1 MB
+  Exists: ✓
+```
 
 ### `version`
 
@@ -672,16 +1116,32 @@ All config options can be overridden with environment variables:
 
 ```bash
 # Format: ICLOUDBRIDGE_<SECTION>__<KEY>
+
+# General
 export ICLOUDBRIDGE_GENERAL__LOG_LEVEL=DEBUG
+
+# Notes
 export ICLOUDBRIDGE_NOTES__ENABLED=true
 export ICLOUDBRIDGE_NOTES__REMOTE_FOLDER=~/Nextcloud/Notes
+export ICLOUDBRIDGE_NOTES__USE_SHORTCUTS_FOR_PUSH=true
+export ICLOUDBRIDGE_NOTES__CHECKLIST_SHORTCUT="CheckListBuilder"
+export ICLOUDBRIDGE_NOTES__CONTENT_SHORTCUT="NoteContentBuilder"
+
+# Reminders
 export ICLOUDBRIDGE_REMINDERS__CALDAV_URL=https://nextcloud.example.com/remote.php/dav
 export ICLOUDBRIDGE_REMINDERS__CALDAV_USERNAME=myuser
+
+# Passwords
 export ICLOUDBRIDGE_PASSWORDS__VAULTWARDEN_URL=https://vault.example.com
 export ICLOUDBRIDGE_PASSWORDS__VAULTWARDEN_EMAIL=user@example.com
 ```
 
 **Priority**: Environment variables > config.toml > defaults
+
+**Notes-specific variables**:
+- `USE_SHORTCUTS_FOR_PUSH` - Enable/disable Shortcut pipeline (default: true)
+- `CHECKLIST_SHORTCUT` - Name of checklist builder shortcut (default: "CheckListBuilder")
+- `CONTENT_SHORTCUT` - Name of content builder shortcut (default: "NoteContentBuilder")
 
 ---
 

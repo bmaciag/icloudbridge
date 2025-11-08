@@ -1,5 +1,6 @@
 """Notes synchronization endpoints."""
 
+import asyncio
 import json
 import logging
 import time
@@ -46,17 +47,41 @@ async def list_folders(engine: NotesSyncEngineDep):
 @router.post("/sync")
 async def sync_notes(
     request: NotesSyncRequest,
-    engine: NotesSyncEngineDep,
     config: ConfigDep,
 ):
     """Trigger notes synchronization.
 
     Args:
         request: Sync configuration options
+            - folder: Specific folder to sync, or None to sync all folders
+            - dry_run: Preview changes without applying
+            - skip_deletions: Skip all deletion operations
+            - deletion_threshold: Max deletions before confirmation (default: 5)
+            - rich_notes_export: Export read-only rich notes snapshot after sync
+            - use_shortcuts: Override shortcut pipeline preference (None = use config)
 
     Returns:
         Sync results with statistics
     """
+    # Create sync engine with optional shortcut pipeline override
+    from icloudbridge.core.sync import NotesSyncEngine
+
+    config.ensure_data_dir()
+    db_path = config.general.data_dir / "notes.db"
+    markdown_base_path = config.notes.remote_folder
+
+    if not markdown_base_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Notes remote_folder not configured"
+        )
+
+    # Use per-request override if provided, otherwise fall back to config
+    prefer_shortcuts = request.use_shortcuts if request.use_shortcuts is not None else True
+
+    engine = NotesSyncEngine(markdown_base_path, db_path, prefer_shortcuts=prefer_shortcuts)
+    await engine.initialize()
+
     # Create sync log entry ONLY if not a dry run
     log_id = None
     sync_logs_db = None
@@ -73,14 +98,84 @@ async def sync_notes(
     start_time = time.time()
 
     try:
-        # Perform sync
-        result = await engine.sync_folder(
-            folder_name=request.folder,
-            markdown_subfolder=None,
-            dry_run=request.dry_run,
-            skip_deletions=request.skip_deletions,
-            deletion_threshold=request.deletion_threshold,
-        )
+        # Handle all-folders sync vs single folder sync
+        if request.folder:
+            # Single folder sync (existing behavior)
+            result = await engine.sync_folder(
+                folder_name=request.folder,
+                markdown_subfolder=None,
+                dry_run=request.dry_run,
+                skip_deletions=request.skip_deletions,
+                deletion_threshold=request.deletion_threshold,
+            )
+        else:
+            # All-folders sync (NEW)
+            folders = await engine.list_folders()
+
+            # Initialize aggregated statistics
+            total_stats = {
+                "created": 0,
+                "updated": 0,
+                "deleted": 0,
+                "unchanged": 0,
+                "errors": 0
+            }
+            folder_results = []
+
+            for folder_info in folders:
+                folder_name = folder_info["name"]
+                try:
+                    folder_result = await engine.sync_folder(
+                        folder_name=folder_name,
+                        markdown_subfolder=None,
+                        dry_run=request.dry_run,
+                        skip_deletions=request.skip_deletions,
+                        deletion_threshold=request.deletion_threshold,
+                    )
+
+                    # Aggregate statistics
+                    total_stats["created"] += folder_result.get("created", 0)
+                    total_stats["updated"] += folder_result.get("updated", 0)
+                    total_stats["deleted"] += folder_result.get("deleted", 0)
+                    total_stats["unchanged"] += folder_result.get("unchanged", 0)
+
+                    folder_results.append({
+                        "folder": folder_name,
+                        "status": "success",
+                        "stats": folder_result
+                    })
+                except Exception as e:
+                    total_stats["errors"] += 1
+                    folder_results.append({
+                        "folder": folder_name,
+                        "status": "error",
+                        "error": str(e)
+                    })
+                    logger.error(f"Failed to sync folder {folder_name}: {e}")
+
+            # Create aggregated result
+            result = total_stats.copy()
+            result["folder_count"] = len(folders)
+            result["folder_results"] = folder_results
+
+        # Handle rich notes export if requested (NEW)
+        if request.rich_notes_export and not request.dry_run:
+            try:
+                from icloudbridge.sources.notes.rich_notes_exporter import RichNotesExporter
+                exporter = RichNotesExporter(
+                    db_path=db_path,
+                    remote_folder=markdown_base_path
+                )
+                await asyncio.to_thread(exporter.export, dry_run=False)
+                logger.info("Rich notes exported to RichNotes/ folder")
+                if "metadata" not in result:
+                    result["metadata"] = {}
+                result["metadata"]["rich_notes_exported"] = True
+            except Exception as e:
+                logger.error(f"Rich notes export failed: {e}")
+                if "metadata" not in result:
+                    result["metadata"] = {}
+                result["metadata"]["rich_notes_export_error"] = str(e)
 
         duration = time.time() - start_time
 
@@ -92,6 +187,11 @@ async def sync_notes(
                 duration_seconds=round(duration, 0),
                 stats_json=json.dumps(result),
             )
+
+        # Add pipeline info to metadata
+        if "metadata" not in result:
+            result["metadata"] = {}
+        result["metadata"]["pipeline_used"] = "shortcuts" if prefer_shortcuts else "classic_applescript"
 
         return {
             "status": "success",
