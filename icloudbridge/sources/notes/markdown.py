@@ -28,9 +28,6 @@ from icloudbridge.utils.converters import (
 
 logger = logging.getLogger(__name__)
 
-_METADATA_PREFIX = "<!-- icloudbridge-metadata "
-_METADATA_SUFFIX = "-->"
-
 
 @dataclass
 class MarkdownNote:
@@ -80,6 +77,7 @@ class MarkdownAdapter:
             base_path: Root folder for markdown notes (e.g., ~/NextCloud/Notes)
         """
         self.base_path = Path(base_path).expanduser().resolve()
+        self._metadata_suffix = ".meta.json"
 
     async def ensure_folder_exists(self, folder_path: Path | None = None) -> None:
         """
@@ -91,6 +89,51 @@ class MarkdownAdapter:
         target = folder_path if folder_path else self.base_path
         target.mkdir(parents=True, exist_ok=True)
         logger.debug(f"Ensured folder exists: {target}")
+
+    def _metadata_path(self, file_path: Path) -> Path:
+        return file_path.parent / f".{file_path.name}{self._metadata_suffix}"
+
+    def _read_metadata_file(self, file_path: Path) -> dict[str, str]:
+        metadata_file = self._metadata_path(file_path)
+        if not metadata_file.exists():
+            return {}
+        try:
+            data = json.loads(metadata_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+            return {}
+        except Exception as exc:
+            logger.warning("Failed to read metadata %s: %s", metadata_file, exc)
+            return {}
+
+    def _write_metadata_file(self, file_path: Path, metadata: dict[str, str]) -> None:
+        metadata_file = self._metadata_path(file_path)
+        if not metadata:
+            metadata_file.unlink(missing_ok=True)
+            return
+        metadata_file.parent.mkdir(parents=True, exist_ok=True)
+        metadata_file.write_text(json.dumps(metadata, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+
+    def _remove_metadata_file(self, file_path: Path) -> None:
+        self._metadata_path(file_path).unlink(missing_ok=True)
+
+    def _extract_inline_metadata(self, content: str) -> tuple[dict[str, str], str]:
+        prefix = "<!-- icloudbridge-metadata "
+        suffix = "-->"
+        working = content.lstrip("\ufeff")
+        if not working.startswith(prefix):
+            return {}, content
+        end_idx = working.find(suffix)
+        if end_idx == -1:
+            return {}, content
+        raw = working[len(prefix):end_idx].strip()
+        remainder = working[end_idx + len(suffix):].lstrip("\n")
+        try:
+            data = json.loads(raw)
+            metadata = data if isinstance(data, dict) else {}
+        except json.JSONDecodeError:
+            metadata = {}
+        return metadata, remainder
 
     async def list_notes(self, folder_name: str | None = None) -> list[Path]:
         """
@@ -138,7 +181,9 @@ class MarkdownAdapter:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 content = await f.read()
 
-            metadata, body = self._split_metadata(content)
+            metadata = self._read_metadata_file(file_path)
+            inline_meta, body = self._extract_inline_metadata(content)
+            merged_metadata = {**inline_meta, **metadata} if inline_meta else metadata
 
             # Get file metadata
             stat = await aiofiles.os.stat(file_path)
@@ -158,7 +203,7 @@ class MarkdownAdapter:
                 body_markdown=body,
                 file_path=file_path,
                 attachments=attachments,
-                metadata=metadata,
+                metadata=merged_metadata,
             )
 
         except Exception as e:
@@ -209,9 +254,8 @@ class MarkdownAdapter:
 
             # Convert HTML to Markdown
             markdown_body = html_to_markdown(body_html, note_name)
-
-            # Note: Title is already in the body from Apple Notes, don't duplicate it
-            markdown_content = self._apply_metadata(metadata or {}, markdown_body)
+            markdown_content = markdown_body
+            effective_metadata = metadata or {}
 
             if attachments:
                 self._sync_attachments(target_folder, attachments)
@@ -221,6 +265,8 @@ class MarkdownAdapter:
             # Write markdown file
             async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
                 await f.write(markdown_content)
+
+            self._write_metadata_file(file_path, effective_metadata)
 
             # Set modification time if provided
             if modified_date:
@@ -279,7 +325,8 @@ class MarkdownAdapter:
 
             # Otherwise, overwrite in place
             markdown_body = html_to_markdown(body_html, note_name or file_path.stem)
-            markdown_content = self._apply_metadata(metadata or {}, markdown_body)
+            markdown_content = markdown_body
+            effective_metadata = metadata or {}
 
             if attachments:
                 self._sync_attachments(file_path.parent, attachments)
@@ -289,6 +336,8 @@ class MarkdownAdapter:
             # Write file
             async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
                 await f.write(markdown_content)
+
+            self._write_metadata_file(file_path, effective_metadata)
 
             # Set modification time
             if modified_date:
@@ -321,6 +370,8 @@ class MarkdownAdapter:
                 logger.info(f"Deleted markdown file: {file_path}")
             else:
                 logger.warning(f"File already deleted: {file_path}")
+
+            self._remove_metadata_file(file_path)
 
             return True
 
@@ -376,33 +427,6 @@ class MarkdownAdapter:
             raise RuntimeError(f"Attachment path {relative_ref} escapes target folder {base_folder}")
         return dest_path
 
-    def _split_metadata(self, content: str) -> tuple[dict[str, str], str]:
-        working = content.lstrip("\ufeff")
-        if not working.startswith(_METADATA_PREFIX):
-            return {}, content
-
-        end_idx = working.find(_METADATA_SUFFIX)
-        if end_idx == -1:
-            return {}, content
-
-        raw = working[len(_METADATA_PREFIX) : end_idx].strip()
-        remainder = working[end_idx + len(_METADATA_SUFFIX) :].lstrip("\n")
-        try:
-            metadata = json.loads(raw) if raw else {}
-            if not isinstance(metadata, dict):
-                metadata = {}
-        except json.JSONDecodeError:
-            metadata = {}
-        return metadata, remainder
-
-    def _apply_metadata(self, metadata: dict[str, str], body: str) -> str:
-        if not metadata:
-            return body
-
-        payload = json.dumps(metadata, separators=(",", ":"), sort_keys=True)
-        header = f"{_METADATA_PREFIX}{payload} {_METADATA_SUFFIX}\n\n"
-        return header + body.lstrip("\n")
-
     def _inline_markdown_attachments(self, markdown: str, attachment_paths: dict[str, Path]) -> str:
         if not attachment_paths:
             return markdown
@@ -420,6 +444,10 @@ class MarkdownAdapter:
         return inlined
 
     async def get_attachment_slug(self, file_path: Path) -> str | None:
+        metadata = self._read_metadata_file(file_path)
+        slug = metadata.get("attachment_slug")
+        if slug:
+            return slug
         try:
             note = await self.read_note(file_path)
         except FileNotFoundError:
