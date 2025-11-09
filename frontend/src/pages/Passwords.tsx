@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Key, RefreshCw, Upload, Download, Trash2, Lock } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
 import apiClient from '@/lib/api-client';
 import { useSyncStore } from '@/store/sync-store';
-import type { SyncLog } from '@/types/api';
+import type { AppConfig, SyncLog } from '@/types/api';
 
 export default function Passwords() {
   const [history, setHistory] = useState<SyncLog[]>([]);
@@ -20,14 +21,26 @@ export default function Passwords() {
   const [vaultwardenUrl, setVaultwardenUrl] = useState('');
   const [vaultwardenToken, setVaultwardenToken] = useState('');
   const [showCredentialsForm, setShowCredentialsForm] = useState(false);
-  const importFileRef = useRef<HTMLInputElement>(null);
-
+  const [config, setConfig] = useState<AppConfig | null>(null);
   const { activeSyncs } = useSyncStore();
   const activeSync = activeSyncs.get('passwords');
 
   useEffect(() => {
     loadData();
+    loadConfig();
   }, []);
+
+  const loadConfig = async () => {
+    try {
+      const cfg = await apiClient.getConfig();
+      setConfig(cfg);
+      if (cfg.passwords_vaultwarden_url) {
+        setVaultwardenUrl(cfg.passwords_vaultwarden_url);
+      }
+    } catch (err) {
+      console.error('Failed to load config:', err);
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -200,6 +213,28 @@ export default function Passwords() {
     };
     input.click();
   };
+
+  if (!loading && config && config.passwords_enabled === false) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Passwords sync is disabled</CardTitle>
+            <CardDescription>Enable Passwords sync in Settings to unlock VaultWarden tools.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Use the Settings screen to turn Passwords sync back on. Once enabled, you can manage imports, exports,
+              and VaultWarden credentials here.
+            </p>
+            <Button asChild>
+              <Link to="/settings">Go to Settings</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

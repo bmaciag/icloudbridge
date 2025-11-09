@@ -1,14 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { RefreshCw, Activity, Calendar, Key, FileText, AlertTriangle, ExternalLink } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import type { BadgeProps } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useAppStore } from '@/store/app-store';
 import { useSyncStore } from '@/store/sync-store';
 import apiClient from '@/lib/api-client';
-import type { StatusResponse, SetupVerificationResponse } from '@/types/api';
+import type { SetupVerificationResponse } from '@/types/api';
 
 export default function Dashboard() {
   const { status, setStatus, wsConnected } = useAppStore();
@@ -18,15 +19,7 @@ export default function Dashboard() {
   const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
   const [showSetupWarning, setShowSetupWarning] = useState(false);
 
-  useEffect(() => {
-    loadStatus();
-    loadVerification();
-    // Refresh status every 30 seconds
-    const interval = setInterval(loadStatus, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const loadStatus = async () => {
+  const loadStatus = useCallback(async () => {
     try {
       setLoading(true);
       const data = await apiClient.status();
@@ -37,9 +30,9 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [setStatus]);
 
-  const loadVerification = async () => {
+  const loadVerification = useCallback(async () => {
     try {
       const result = await apiClient.verifySetup();
       setVerification(result);
@@ -50,10 +43,18 @@ export default function Dashboard() {
     } catch (err) {
       console.error('Failed to load verification:', err);
     }
-  };
+  }, [status?.notes?.enabled]);
+
+  useEffect(() => {
+    loadStatus();
+    loadVerification();
+    // Refresh status every 30 seconds
+    const interval = setInterval(loadStatus, 30000);
+    return () => clearInterval(interval);
+  }, [loadStatus, loadVerification]);
 
   const getStatusBadge = (serviceStatus: string) => {
-    const statusMap: Record<string, { variant: any; label: string }> = {
+    const statusMap: Record<string, { variant: BadgeProps['variant']; label: string }> = {
       idle: { variant: 'secondary', label: 'Idle' },
       running: { variant: 'default', label: 'Running' },
       success: { variant: 'success', label: 'Success' },

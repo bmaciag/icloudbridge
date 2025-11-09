@@ -18,7 +18,7 @@ function App() {
   // Apply theme on initial load
   useEffect(() => {
     setTheme(theme);
-  }, []);
+  }, [theme, setTheme]);
 
   useEffect(() => {
     // Check if this is first run by trying to load config

@@ -18,7 +18,7 @@ import { Progress } from '@/components/ui/progress';
 import { FolderBrowserDialog } from '@/components/FolderBrowserDialog';
 import { useAppStore } from '@/store/app-store';
 import apiClient from '@/lib/api-client';
-import type { AppConfig, SetupVerificationResponse } from '@/types/api';
+import type { AppConfig, ConnectionTestResponse, SetupVerificationResponse } from '@/types/api';
 
 const STEPS = [
   { id: 'welcome', title: 'Welcome', description: 'Get started with iCloudBridge' },
@@ -35,7 +35,7 @@ export default function FirstRunWizard() {
   const [currentStep, setCurrentStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<any>(null);
+  const [testResult, setTestResult] = useState<ConnectionTestResponse | null>(null);
   const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
@@ -69,7 +69,7 @@ export default function FirstRunWizard() {
         return Math.random() * (max - min) + min;
       }
 
-      const interval: any = setInterval(function() {
+      const interval = window.setInterval(function() {
         const timeLeft = animationEnd - Date.now();
 
         if (timeLeft <= 0) {
@@ -266,7 +266,8 @@ export default function FirstRunWizard() {
       setError(errorMessage);
       // Add more detailed logging
       if (err && typeof err === 'object' && 'response' in err) {
-        console.error('Response data:', (err as any).response?.data);
+        const responseError = err as { response?: { data?: unknown } };
+        console.error('Response data:', responseError.response?.data);
       }
     } finally {
       setLoading(false);
@@ -802,7 +803,7 @@ export default function FirstRunWizard() {
           </div>
         );
 
-      case 'test':
+      case 'test': {
         // Determine what services need testing
         const needsTest = formData.reminders_enabled || formData.passwords_enabled;
         let testService = '';
@@ -890,6 +891,7 @@ export default function FirstRunWizard() {
             )}
           </div>
         );
+      }
 
       case 'complete':
         return (

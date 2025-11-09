@@ -1109,6 +1109,21 @@ class SyncLogsDB:
             logger.info(f"Cleaned up {deleted_count} old sync logs (older than {retention_days} days)")
             return deleted_count
 
+    async def clear_service_logs(self, service: str) -> int:
+        """Delete all logs for a given service (e.g. when resetting that feature)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                DELETE FROM sync_logs
+                WHERE service = ?
+                """,
+                (service,),
+            )
+            await db.commit()
+            removed = cursor.rowcount
+            logger.info(f"Cleared {removed} sync log(s) for service '{service}'")
+            return removed
+
     async def close(self) -> None:
         """Close database connection if open."""
         if self._connection:

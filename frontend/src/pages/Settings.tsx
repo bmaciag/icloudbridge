@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Settings as SettingsIcon, RefreshCw, Save, Trash2, FileText, Calendar, Key, Download, Shield, AlertTriangle, ExternalLink, CheckCircle, Loader2, Database } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,9 +22,24 @@ export default function Settings() {
   const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
   const [verifying, setVerifying] = useState(false);
 
+  const loadConfig = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      setSuccess(null);
+      const data = await apiClient.getConfig();
+      setConfig(data);
+      setFormData(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load configuration');
+    } finally {
+      setLoading(false);
+    }
+  }, [setConfig]);
+
   useEffect(() => {
     loadConfig();
-  }, []);
+  }, [loadConfig]);
 
   useEffect(() => {
     if (config) {
@@ -38,21 +53,6 @@ export default function Settings() {
       loadVerification();
     }
   }, [formData.notes_enabled]);
-
-  const loadConfig = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      setSuccess(null);
-      const data = await apiClient.getConfig();
-      setConfig(data);
-      setFormData(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load configuration');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const loadVerification = async () => {
     try {

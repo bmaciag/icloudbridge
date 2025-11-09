@@ -14,13 +14,13 @@ interface UseWebSocketOptions {
   maxReconnectAttempts?: number;
   onOpen?: () => void;
   onClose?: () => void;
-  onError?: (error: Event) => void;
+  onSocketError?: (error: Event) => void;
   onMessage?: (message: WebSocketMessage) => void;
   onSyncProgress?: (service: string, data: SyncProgressMessage) => void;
   onLogEntry?: (service: string, data: LogEntryMessage) => void;
   onScheduleRun?: (service: string, data: ScheduleRunMessage) => void;
-  onError?: (service: string, data: ErrorMessage) => void;
-  onStatusUpdate?: (service: string, data: any) => void;
+  onServiceError?: (service: string, data: ErrorMessage) => void;
+  onStatusUpdate?: (service: string, data: Record<string, unknown>) => void;
 }
 
 interface UseWebSocketReturn {
@@ -29,7 +29,7 @@ interface UseWebSocketReturn {
   error: string | null;
   connect: () => void;
   disconnect: () => void;
-  send: (message: any) => void;
+  send: (message: unknown) => void;
   subscribe: (service: string) => void;
   unsubscribe: (service: string) => void;
 }
@@ -42,11 +42,12 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     maxReconnectAttempts = 10,
     onOpen,
     onClose,
-    onError,
+    onSocketError,
     onMessage,
     onSyncProgress,
     onLogEntry,
     onScheduleRun,
+    onServiceError,
     onStatusUpdate,
   } = options;
 
@@ -56,8 +57,8 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const clearReconnectTimeout = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -102,7 +103,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
 
         case 'error':
           if (message.service && message.data) {
-            onError?.(message.service, message.data as ErrorMessage);
+            onServiceError?.(message.service, message.data as ErrorMessage);
           }
           break;
 
@@ -127,7 +128,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       console.error('Error parsing WebSocket message:', err);
       setError('Failed to parse message');
     }
-  }, [onMessage, onSyncProgress, onLogEntry, onScheduleRun, onError, onStatusUpdate]);
+  }, [onMessage, onSyncProgress, onLogEntry, onScheduleRun, onServiceError, onStatusUpdate]);
 
   const startPing = useCallback(() => {
     clearPingInterval();
@@ -191,7 +192,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
           console.warn('WebSocket connection failed (real-time updates unavailable)');
         }
         setError('WebSocket connection error');
-        onError?.(event);
+        onSocketError?.(event);
       };
 
       ws.onmessage = handleMessage;
@@ -209,7 +210,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     reconnectInterval,
     onOpen,
     onClose,
-    onError,
+    onSocketError,
     handleMessage,
     clearReconnectTimeout,
     startPing,
@@ -230,7 +231,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     setIsConnecting(false);
   }, [clearReconnectTimeout, clearPingInterval, maxReconnectAttempts]);
 
-  const send = useCallback((message: any) => {
+  const send = useCallback((message: unknown) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
     } else {
@@ -256,7 +257,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     return () => {
       disconnect();
     };
-  }, [autoConnect]); // Only run on mount/unmount
+  }, [autoConnect, connect, disconnect]);
 
   return {
     isConnected,

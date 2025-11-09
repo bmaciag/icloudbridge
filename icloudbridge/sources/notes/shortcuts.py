@@ -23,10 +23,12 @@ class NotesShortcutAdapter:
         self.call_log = call_log if call_log is not None else []
 
     async def upsert_note(self, folder: str, title: str) -> None:
+        folder = self._normalize_folder(folder)
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._run_upsert, folder, title)
 
     async def append_checklist(self, folder: str, title: str, checklist_markdown: str) -> None:
+        folder = self._normalize_folder(folder)
         payload = f"{folder}\n{title}\n\n{checklist_markdown.rstrip()}\n"
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
@@ -39,6 +41,7 @@ class NotesShortcutAdapter:
         )
 
     async def append_content(self, folder: str, title: str, markdown_block: str) -> None:
+        folder = self._normalize_folder(folder)
         normalized_block = add_markdown_soft_breaks(markdown_block)
         normalized_block = insert_markdown_blank_line_markers(normalized_block)
         payload = f"{folder}\n{title}\n\n{normalized_block.rstrip()}\n"
@@ -51,6 +54,13 @@ class NotesShortcutAdapter:
             title,
             payload,
         )
+
+    @staticmethod
+    def _normalize_folder(folder: str) -> str:
+        parts = folder.split("/", 1)
+        if len(parts) == 2 and parts[0].strip().lower() in {"icloud", "on my mac"}:
+            return parts[1]
+        return folder
 
     def _run_upsert(self, folder: str, title: str) -> None:
         data = f"{folder};;{title}"

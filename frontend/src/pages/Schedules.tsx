@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Clock, RefreshCw, Plus, Play, Pause, Trash2, Edit } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Clock, RefreshCw, Plus, Play, Pause, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -15,8 +15,6 @@ export default function Schedules() {
   const {
     schedules,
     setSchedules,
-    selectedSchedule,
-    setSelectedSchedule,
     serviceFilter,
     setServiceFilter,
   } = useSchedulesStore();
@@ -37,11 +35,7 @@ export default function Schedules() {
     enabled: true,
   });
 
-  useEffect(() => {
-    loadSchedules();
-  }, [serviceFilter]);
-
-  const loadSchedules = async () => {
+  const loadSchedules = useCallback(async () => {
     try {
       setLoading(true);
       const data = await apiClient.getSchedules(serviceFilter || undefined);
@@ -51,7 +45,11 @@ export default function Schedules() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [serviceFilter, setSchedules]);
+
+  useEffect(() => {
+    loadSchedules();
+  }, [loadSchedules]);
 
   const handleCreate = async () => {
     try {
@@ -230,7 +228,7 @@ export default function Schedules() {
                   id="service"
                   className="w-full h-10 px-3 rounded-md border border-input bg-background"
                   value={formData.service}
-                  onChange={(e) => setFormData({ ...formData, service: e.target.value as any })}
+                  onChange={(e) => setFormData({ ...formData, service: e.target.value })}
                 >
                   <option value="notes">Notes</option>
                   <option value="reminders">Reminders</option>

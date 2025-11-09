@@ -17,6 +17,44 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def build_notes_sync_message(stats: dict | None) -> str:
+    """Create a human readable summary for sync statistics."""
+    if not stats:
+        return "Sync operation completed"
+
+    def combined(*keys: str) -> int:
+        return sum(int(stats.get(key, 0) or 0) for key in keys)
+
+    created = stats.get("created")
+    if created is None:
+        created = combined("created_local", "created_remote")
+
+    updated = stats.get("updated")
+    if updated is None:
+        updated = combined("updated_local", "updated_remote")
+
+    deleted = stats.get("deleted")
+    if deleted is None:
+        deleted = combined("deleted_local", "deleted_remote")
+
+    msg_parts: list[str] = []
+    if created:
+        msg_parts.append(f"created {created}")
+    if updated:
+        msg_parts.append(f"updated {updated}")
+    if deleted:
+        msg_parts.append(f"deleted {deleted}")
+
+    message = f"Synced: {', '.join(msg_parts)} note(s)" if msg_parts else "Synced, no changes needed"
+
+    errors = int(stats.get("errors", 0) or 0)
+    if errors:
+        plural = "s" if errors != 1 else ""
+        message += f" (⚠️ {errors} folder error{plural} encountered)"
+
+    return message
+
+
 @router.get("/folders")
 async def list_folders(engine: NotesSyncEngineDep):
     """List all Apple Notes folders.
@@ -239,10 +277,10 @@ async def sync_notes(
                         })
                         logger.error(f"Failed to sync folder {folder_name}: {e}")
 
-            # Create aggregated result
-            result = total_stats.copy()
-            result["folder_count"] = len(folders)
-            result["folder_results"] = folder_results
+                # Create aggregated result for automatic mode
+                result = total_stats.copy()
+                result["folder_count"] = len(folders)
+                result["folder_results"] = folder_results
 
         # Handle rich notes export if requested (NEW)
         if request.rich_notes_export and not request.dry_run:
@@ -279,11 +317,15 @@ async def sync_notes(
             result["metadata"] = {}
         result["metadata"]["pipeline_used"] = "shortcuts" if prefer_shortcuts else "classic_applescript"
 
-        return {
+        response = {
             "status": "success",
+            "message": build_notes_sync_message(result),
             "duration_seconds": duration,
             "stats": result,
+            "log_id": log_id,
         }
+
+        return response
 
     except Exception as e:
         duration = time.time() - start_time
@@ -335,21 +377,8 @@ async def get_status(notes_db: NotesDBDep, config: ConfigDep):
         message = ""
         if log["status"] == "failed":
             message = log.get("error_message", "Sync failed")
-        elif sync_stats:
-            msg_parts = []
-            if sync_stats.get("created", 0) > 0:
-                msg_parts.append(f"created {sync_stats['created']}")
-            if sync_stats.get("updated", 0) > 0:
-                msg_parts.append(f"updated {sync_stats['updated']}")
-            if sync_stats.get("deleted", 0) > 0:
-                msg_parts.append(f"deleted {sync_stats['deleted']}")
-
-            if msg_parts:
-                message = f"Synced: {', '.join(msg_parts)} note(s)"
-            else:
-                message = "Synced, no changes needed"
         else:
-            message = "Sync operation completed"
+            message = build_notes_sync_message(sync_stats)
 
         # Convert timestamps to ISO strings
         started_at = datetime.fromtimestamp(log["started_at"]).isoformat() if log.get("started_at") else None
@@ -415,21 +444,8 @@ async def get_history(
         message = ""
         if log["status"] == "failed":
             message = log.get("error_message", "Sync failed")
-        elif stats:
-            msg_parts = []
-            if stats.get("created", 0) > 0:
-                msg_parts.append(f"created {stats['created']}")
-            if stats.get("updated", 0) > 0:
-                msg_parts.append(f"updated {stats['updated']}")
-            if stats.get("deleted", 0) > 0:
-                msg_parts.append(f"deleted {stats['deleted']}")
-
-            if msg_parts:
-                message = f"Synced: {', '.join(msg_parts)} note(s)"
-            else:
-                message = "Synced, no changes needed"
         else:
-            message = "Sync operation completed"
+            message = build_notes_sync_message(stats)
 
         # Convert Unix timestamps (seconds) to ISO strings
         started_at = datetime.fromtimestamp(log["started_at"]).isoformat() if log.get("started_at") else None
@@ -475,6 +491,22 @@ async def reset_database(notes_db: NotesDBDep, engine: NotesSyncEngineDep, confi
         await sync_logs_db.initialize()
         await sync_logs_db.clear_service_logs("notes")
         logger.info("Notes sync history cleared")
+
+        # Clear manual folder mappings so UI returns to auto mode
+        had_manual_mappings = bool(config.notes.folder_mappings)
+        if had_manual_mappings:
+            config.notes.folder_mappings.clear()
+            config.notes.folder_mappings = {}
+            config_path = getattr(config.general, "config_file", None)
+            if config_path is None:
+                config_path = config.default_config_path
+            try:
+                config.save_to_file(config_path)
+                from icloudbridge.api.dependencies import get_config
+                get_config.cache_clear()
+                logger.info("Cleared notes folder mappings during reset")
+            except Exception as e:
+                logger.warning(f"Failed to persist cleared folder mappings: {e}")
 
         return {
             "status": "success",

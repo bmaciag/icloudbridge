@@ -23,6 +23,10 @@ from icloudbridge.utils.slugs import generate_attachment_slug
 
 logger = logging.getLogger(__name__)
 
+# Track at most this many note titles per category to keep simulation payloads reasonable.
+DETAIL_ENTRY_LIMIT = 50
+DETAIL_CATEGORIES = ("added", "updated", "deleted", "unchanged")
+
 
 class NotesSyncEngine:
     """
@@ -201,6 +205,18 @@ class NotesSyncEngine:
             "would_delete_local": 0,  # For dry_run
             "would_delete_remote": 0,  # For dry_run
         }
+        stats["details"] = {
+            "apple": {category: [] for category in DETAIL_CATEGORIES},
+            "markdown": {category: [] for category in DETAIL_CATEGORIES},
+        }
+
+        def record_detail(section: str, category: str, title: str | None) -> None:
+            """Capture note titles for preview UI (bounded per category)."""
+            if not title:
+                return
+            detail_list = stats["details"][section][category]
+            if len(detail_list) < DETAIL_ENTRY_LIMIT:
+                detail_list.append(title)
 
         try:
             if self.notes_adapter.is_ignored_folder(folder_name):
@@ -303,6 +319,7 @@ class NotesSyncEngine:
                             await self.notes_adapter.delete_note(folder_name, apple_note.name)
                             await self.db.delete_mapping(uuid)
                             stats["deleted_local"] += 1
+                            record_detail("apple", "deleted", apple_note.name)
                         continue
 
                     # Both exist - check which is newer
@@ -332,6 +349,8 @@ class NotesSyncEngine:
                                 )
                                 remote_path = updated_path
                             stats["updated_remote"] += 1
+                            record_detail("markdown", "updated", apple_note.name)
+                            record_detail("markdown", "updated", apple_note.name)
                         elif sync_mode == "import" or sync_mode == "bidirectional":
                             # Import mode or remote is newer in bidirectional - pull from remote
                             if dry_run:
@@ -350,6 +369,8 @@ class NotesSyncEngine:
                                 if new_uuid:
                                     uuid = new_uuid
                             stats["updated_local"] += 1
+                            record_detail("apple", "updated", apple_note.name)
+                            record_detail("apple", "updated", apple_note.name)
 
                         # Update mapping with current timestamp
                         if not dry_run:
@@ -367,6 +388,8 @@ class NotesSyncEngine:
                         if sync_mode == "import":
                             logger.debug(f"Local changed but in import mode - skipping: {apple_note.name}")
                             stats["unchanged"] += 1
+                            record_detail("apple", "unchanged", apple_note.name)
+                            record_detail("markdown", "unchanged", apple_note.name)
                         else:
                             if dry_run:
                                 logger.info(f"[DRY RUN] Would update remote: {apple_note.name}")
@@ -394,6 +417,8 @@ class NotesSyncEngine:
                         if sync_mode == "export":
                             logger.debug(f"Remote changed but in export mode - skipping: {apple_note.name}")
                             stats["unchanged"] += 1
+                            record_detail("apple", "unchanged", apple_note.name)
+                            record_detail("markdown", "unchanged", apple_note.name)
                         else:
                             if dry_run:
                                 logger.info(f"[DRY RUN] Would update local: {apple_note.name}")
@@ -421,6 +446,8 @@ class NotesSyncEngine:
                         # Neither changed - no sync needed
                         logger.debug(f"Unchanged: {apple_note.name}")
                         stats["unchanged"] += 1
+                        record_detail("apple", "unchanged", apple_note.name)
+                        record_detail("markdown", "unchanged", apple_note.name)
 
                 else:
                     # Note is not mapped - it's new, create on remote (only in export/bidirectional mode)
@@ -450,6 +477,7 @@ class NotesSyncEngine:
                     processed_local_uuids.add(uuid)
                     processed_remote_paths.add(str(remote_path))
                     stats["created_remote"] += 1
+                    record_detail("markdown", "added", apple_note.name)
 
             # 4b. Process markdown files that don't have local notes
             for remote_path_str, md_note in remote_notes_by_path.items():
@@ -473,6 +501,7 @@ class NotesSyncEngine:
                         await self.markdown_adapter.delete_note(Path(remote_path_str))
                         await self.db.delete_mapping_by_remote_path(remote_path_str)
                         stats["deleted_remote"] += 1
+                        record_detail("markdown", "deleted", md_note.name)
                 else:
                     # New remote file - create in Apple Notes (only in import/bidirectional mode)
                     if sync_mode == "export":
@@ -494,6 +523,7 @@ class NotesSyncEngine:
                                 attachment_slug=md_note.metadata.get("attachment_slug"),
                             )
                     stats["created_local"] += 1
+                    record_detail("apple", "added", md_note.name)
 
             logger.info(
                 f"Sync complete for {folder_name}: "

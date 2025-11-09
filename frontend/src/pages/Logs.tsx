@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { Terminal, RefreshCw, Download, Trash2, Search, Filter } from 'lucide-react';
+import { Terminal, Download, Trash2, Search, Filter } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import type { BadgeProps } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -75,22 +76,7 @@ export default function Logs() {
     }
   };
 
-  const getLevelColor = (level: string) => {
-    switch (level) {
-      case 'ERROR':
-        return 'rgb(239 68 68)';
-      case 'WARNING':
-        return 'rgb(234 179 8)';
-      case 'INFO':
-        return 'rgb(59 130 246)';
-      case 'DEBUG':
-        return 'rgb(156 163 175)';
-      default:
-        return 'rgb(156 163 175)';
-    }
-  };
-
-  const getLevelBadgeVariant = (level: string): any => {
+  const getLevelBadgeVariant = (level: string): BadgeProps['variant'] => {
     switch (level) {
       case 'ERROR':
         return 'destructive';

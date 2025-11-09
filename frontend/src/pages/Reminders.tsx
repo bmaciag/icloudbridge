@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Calendar, RefreshCw, PlayCircle, ChevronDown, Save, Plus, ArrowDown, ArrowUp, Info } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -11,7 +12,7 @@ import { Autocomplete, type AutocompleteOption } from '@/components/ui/autocompl
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import apiClient from '@/lib/api-client';
 import { useSyncStore } from '@/store/sync-store';
-import type { RemindersCalendar, SyncLog } from '@/types/api';
+import type { AppConfig, RemindersCalendar, SyncLog, SyncResponse } from '@/types/api';
 
 // Helper type for reminder items
 interface ReminderItem {
@@ -19,6 +20,21 @@ interface ReminderItem {
   completed: boolean;
   due_date: string | null;
   is_recurring: boolean;
+}
+
+interface RemindersCalendarStats {
+  created_local?: number;
+  created_remote?: number;
+  updated_local?: number;
+  updated_remote?: number;
+  deleted_local?: number;
+  deleted_remote?: number;
+  created_local_items?: ReminderItem[];
+  created_remote_items?: ReminderItem[];
+  updated_local_items?: ReminderItem[];
+  updated_remote_items?: ReminderItem[];
+  deleted_local_items?: ReminderItem[];
+  deleted_remote_items?: ReminderItem[];
 }
 
 // Helper function to format due dates in a human-readable way
@@ -104,11 +120,12 @@ export default function Reminders() {
   const [simulating, setSimulating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [simulationResult, setSimulationResult] = useState<any | null>(null);
+  const [simulationResult, setSimulationResult] = useState<SyncResponse | null>(null);
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
   const [listMappings, setListMappings] = useState<Record<string, string>>({});
   const [caldavCalendars, setCaldavCalendars] = useState<string[]>([]);
   const [showMappings, setShowMappings] = useState(false);
+  const [config, setConfig] = useState<AppConfig | null>(null);
 
   const { activeSyncs } = useSyncStore();
   const activeSync = activeSyncs.get('reminders');
@@ -120,9 +137,10 @@ export default function Reminders() {
 
   const loadConfig = async () => {
     try {
-      const config = await apiClient.getConfig();
-      setMode(config.reminders_sync_mode || 'auto');
-      setListMappings(config.reminders_calendar_mappings || {});
+      const fetchedConfig = await apiClient.getConfig();
+      setMode(fetchedConfig.reminders_sync_mode || 'auto');
+      setListMappings(fetchedConfig.reminders_calendar_mappings || {});
+      setConfig(fetchedConfig);
     } catch (err) {
       console.error('Failed to load config:', err);
     }
@@ -190,7 +208,7 @@ export default function Reminders() {
 
       // Filter out empty mappings
       const filteredMappings = Object.fromEntries(
-        Object.entries(listMappings).filter(([_, caldav]) => caldav && caldav.trim())
+        Object.entries(listMappings).filter(([, caldav]) => caldav && caldav.trim())
       );
 
       await apiClient.updateConfig({
@@ -206,6 +224,28 @@ export default function Reminders() {
       setLoading(false);
     }
   };
+
+  if (!loading && config && config.reminders_enabled === false) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Reminders sync is disabled</CardTitle>
+            <CardDescription>Enable Reminders sync in Settings to configure calendars or run jobs.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Head to the Settings page to turn Reminders sync back on. Once enabled, this screen will let you manage
+              mappings, simulate runs, and trigger syncs.
+            </p>
+            <Button asChild>
+              <Link to="/settings">Go to Settings</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleString();
@@ -374,10 +414,10 @@ export default function Reminders() {
 
                 // Check if this is auto mode with per_calendar stats
                 if (stats.per_calendar) {
-                  const perCalendarStats = stats.per_calendar;
+                  const perCalendarStats = stats.per_calendar as Record<string, RemindersCalendarStats>;
 
                   // Check if there are any changes across all calendars
-                  const hasChanges = Object.values(perCalendarStats).some((calStats: any) =>
+                  const hasChanges = Object.values(perCalendarStats).some((calStats) =>
                     (calStats.created_local || 0) + (calStats.created_remote || 0) +
                     (calStats.updated_local || 0) + (calStats.updated_remote || 0) +
                     (calStats.deleted_local || 0) + (calStats.deleted_remote || 0) > 0
@@ -397,7 +437,7 @@ export default function Reminders() {
                   // Render per-calendar stats
                   return (
                     <div className="space-y-4">
-                      {Object.entries(perCalendarStats).map(([calendarPair, calStats]: [string, any]) => {
+                      {Object.entries(perCalendarStats).map(([calendarPair, calStats]) => {
                         const hasCalendarChanges =
                           (calStats.created_local || 0) + (calStats.created_remote || 0) +
                           (calStats.updated_local || 0) + (calStats.updated_remote || 0) +

@@ -7,11 +7,17 @@ from fastapi import APIRouter, HTTPException, status
 
 from icloudbridge.api.dependencies import ConfigDep
 from icloudbridge.api.models import ConfigResponse, ConfigUpdateRequest
+from icloudbridge.core.config import FolderMapping
 from icloudbridge.utils.credentials import CredentialStore
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _serialize_folder_mappings(mappings: dict[str, FolderMapping]) -> dict[str, dict[str, str]]:
+    """Convert FolderMapping objects into primitive dicts for responses."""
+    return {apple_folder: mapping.model_dump() for apple_folder, mapping in mappings.items()}
 
 
 @router.get("", response_model=ConfigResponse)
@@ -27,6 +33,7 @@ async def get_config(config: ConfigDep):
         reminders_enabled=config.reminders.enabled,
         passwords_enabled=config.passwords.enabled,
         notes_remote_folder=str(config.notes.remote_folder) if config.notes.remote_folder else None,
+        notes_folder_mappings=_serialize_folder_mappings(config.notes.folder_mappings),
         reminders_caldav_url=config.reminders.caldav_url,
         reminders_caldav_username=config.reminders.caldav_username,
         reminders_sync_mode=config.reminders.sync_mode,
@@ -72,6 +79,18 @@ async def update_config(update: ConfigUpdateRequest, config: ConfigDep):
     if update.notes_remote_folder is not None:
         from pathlib import Path
         config.notes.remote_folder = Path(update.notes_remote_folder).expanduser()
+    if update.notes_folder_mappings is not None:
+        try:
+            config.notes.folder_mappings = {
+                apple_folder: FolderMapping(**mapping)
+                for apple_folder, mapping in update.notes_folder_mappings.items()
+            }
+        except Exception as exc:
+            logger.error(f"Invalid notes folder mappings: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid notes folder mappings: {exc}",
+            )
 
     # Update reminders config
     if update.reminders_enabled is not None:
@@ -165,6 +184,7 @@ async def update_config(update: ConfigUpdateRequest, config: ConfigDep):
         reminders_enabled=config.reminders.enabled,
         passwords_enabled=config.passwords.enabled,
         notes_remote_folder=str(config.notes.remote_folder) if config.notes.remote_folder else None,
+        notes_folder_mappings=_serialize_folder_mappings(config.notes.folder_mappings),
         reminders_caldav_url=config.reminders.caldav_url,
         reminders_caldav_username=config.reminders.caldav_username,
         reminders_sync_mode=config.reminders.sync_mode,

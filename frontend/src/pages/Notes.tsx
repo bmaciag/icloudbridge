@@ -1,16 +1,290 @@
-import { useEffect, useState } from 'react';
-import { FileText, RefreshCw, Trash2, AlertTriangle, PlayCircle, ChevronDown, FolderOpen } from 'lucide-react';
+import { Fragment, useEffect, useState } from 'react';
+import {
+  FileText,
+  RefreshCw,
+  Trash2,
+  AlertTriangle,
+  PlayCircle,
+  ChevronDown,
+  FolderOpen,
+  PlusCircle,
+  MinusCircle,
+  CheckCircle2,
+  ChevronRight,
+  ListChecks,
+} from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Link } from 'react-router-dom';
 import { Progress } from '@/components/ui/progress';
 import { Label } from '@/components/ui/label';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { FolderMappingTable } from '@/components/FolderMappingTable';
 import apiClient from '@/lib/api-client';
 import { useSyncStore } from '@/store/sync-store';
-import type { SyncLog, SetupVerificationResponse, NotesAllFoldersResponse, FolderMapping, AppConfig } from '@/types/api';
+import type { SyncLog, SetupVerificationResponse, NotesAllFoldersResponse, FolderMapping, AppConfig, SyncResponse } from '@/types/api';
+
+type SimulationChangeCategory = 'added' | 'updated' | 'deleted' | 'unchanged';
+
+interface SimulationDetailSection {
+  added?: string[];
+  updated?: string[];
+  deleted?: string[];
+  unchanged?: string[];
+}
+
+interface SimulationFolderStats {
+  created_local?: number;
+  created_remote?: number;
+  updated_local?: number;
+  updated_remote?: number;
+  deleted_local?: number;
+  deleted_remote?: number;
+  unchanged?: number;
+  would_delete_local?: number;
+  would_delete_remote?: number;
+  details?: {
+    apple?: SimulationDetailSection;
+    markdown?: SimulationDetailSection;
+  };
+}
+
+interface SimulationFolderResult {
+  folder: string;
+  status: 'success' | 'error';
+  stats?: SimulationFolderStats;
+  error?: string;
+}
+
+type SimulationChangeSummary = Record<SimulationChangeCategory, number>;
+
+const CHANGE_ORDER: SimulationChangeCategory[] = ['added', 'updated', 'deleted', 'unchanged'];
+const CHANGE_LABELS: Record<SimulationChangeCategory, string> = {
+  added: 'Added',
+  updated: 'Updated',
+  deleted: 'Deleted',
+  unchanged: 'Unchanged',
+};
+
+const CHANGE_ICONS: Record<SimulationChangeCategory, typeof PlusCircle> = {
+  added: PlusCircle,
+  updated: RefreshCw,
+  deleted: MinusCircle,
+  unchanged: CheckCircle2,
+};
+
+const CHANGE_COLORS: Record<SimulationChangeCategory, string> = {
+  added: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/40 dark:bg-emerald-400/10 dark:text-emerald-200',
+  updated: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-400/40 dark:bg-blue-400/10 dark:text-blue-200',
+  deleted: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-400/40 dark:bg-rose-400/10 dark:text-rose-200',
+  unchanged: 'border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-400/40 dark:bg-slate-400/10 dark:text-slate-200',
+};
+
+const buildSummary = (stats?: SimulationFolderStats) => ({
+  apple: {
+    added: stats?.created_local ?? 0,
+    updated: stats?.updated_local ?? 0,
+    deleted: stats?.deleted_local ?? 0,
+    unchanged: stats?.unchanged ?? 0,
+  } satisfies SimulationChangeSummary,
+  markdown: {
+    added: stats?.created_remote ?? 0,
+    updated: stats?.updated_remote ?? 0,
+    deleted: stats?.deleted_remote ?? 0,
+    unchanged: stats?.unchanged ?? 0,
+  } satisfies SimulationChangeSummary,
+});
+
+const buildDetails = (stats?: SimulationFolderStats) => ({
+  apple: stats?.details?.apple ?? {},
+  markdown: stats?.details?.markdown ?? {},
+});
+
+interface FolderResultsTableProps {
+  folderResults: SimulationFolderResult[];
+  emptyMessage: string;
+  contextPrefix: string;
+  expandedState: Record<string, boolean>;
+  onToggle: (folderKey: string) => void;
+}
+
+const FolderResultsTable = ({
+  folderResults,
+  emptyMessage,
+  contextPrefix,
+  expandedState,
+  onToggle,
+}: FolderResultsTableProps) => {
+  if (folderResults.length === 0) {
+    return <div className="py-8 text-center text-muted-foreground">{emptyMessage}</div>;
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr>
+            <th className="p-4 text-left font-semibold">Folder</th>
+            <th className="p-4 text-left font-semibold">
+              <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+                <FileText className="h-4 w-4" />
+                Apple Notes
+              </div>
+            </th>
+            <th className="p-4 text-left font-semibold">
+              <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground">
+                <FolderOpen className="h-4 w-4" />
+                Markdown / Nextcloud
+              </div>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {folderResults.map((folderResult, index) => {
+            const stats = folderResult.stats;
+            const summaries = buildSummary(stats);
+            const details = buildDetails(stats);
+            const folderKey = `${contextPrefix}:${folderResult.folder}:${index}`;
+            const isExpanded = expandedState[folderKey];
+
+            return (
+              <Fragment key={`${folderResult.folder}-${index}`}>
+                <tr className="border-b bg-background/70 transition-colors hover:bg-muted/30">
+                  <td className="align-top p-4">
+                    <div className="flex items-start gap-3">
+                      {folderResult.status === 'success' && (
+                        <button
+                          onClick={() => onToggle(folderKey)}
+                          className="rounded-full border p-1 text-muted-foreground transition-colors hover:bg-muted"
+                          aria-label={isExpanded ? 'Collapse details' : 'Expand details'}
+                        >
+                          {isExpanded ? (
+                            <ChevronDown className="h-4 w-4" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4" />
+                          )}
+                        </button>
+                      )}
+                      <div className="space-y-1">
+                        <div className="text-base font-semibold">{folderResult.folder}</div>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <ListChecks className="h-3.5 w-3.5" />
+                          {folderResult.status === 'success' ? 'Sync ready' : 'Sync failed'}
+                        </div>
+                        {folderResult.status === 'error' && (
+                          <div className="flex items-center gap-2 text-sm text-rose-600">
+                            <AlertTriangle className="h-4 w-4" />
+                            {folderResult.error || 'Unknown error'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                  {folderResult.status === 'error' ? (
+                    <td className="p-4 text-sm text-muted-foreground" colSpan={2}>
+                      Unable to preview stats for this folder.
+                    </td>
+                  ) : (
+                    <>
+                      <td className="p-4 align-top">
+                        <div className="grid grid-cols-2 gap-2">
+                          {CHANGE_ORDER.map((key) => {
+                            const Icon = CHANGE_ICONS[key];
+                            return (
+                              <div key={key} className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-semibold ${CHANGE_COLORS[key]}`}>
+                                <Icon className="h-3.5 w-3.5" />
+                                <span>{CHANGE_LABELS[key]}</span>
+                                <span className="ml-auto text-sm">{summaries.apple[key]}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                      <td className="p-4 align-top">
+                        <div className="grid grid-cols-2 gap-2">
+                          {CHANGE_ORDER.map((key) => {
+                            const Icon = CHANGE_ICONS[key];
+                            return (
+                              <div key={key} className={`flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-semibold ${CHANGE_COLORS[key]}`}>
+                                <Icon className="h-3.5 w-3.5" />
+                                <span>{CHANGE_LABELS[key]}</span>
+                                <span className="ml-auto text-sm">{summaries.markdown[key]}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </>
+                  )}
+                </tr>
+                {folderResult.status === 'success' && (
+                  <tr className="border-b">
+                    <td colSpan={3} className="bg-muted/20 p-4">
+                      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isExpanded ? 'rotate-0' : '-rotate-90'}`} />
+                        Details
+                      </div>
+                      {isExpanded ? (
+                        <div className="mt-4 grid gap-6 md:grid-cols-2">
+                          {(
+                            [
+                              { key: 'apple', title: 'Apple Notes', icon: FileText },
+                              { key: 'markdown', title: 'Markdown / Nextcloud', icon: FolderOpen },
+                            ] as const
+                          ).map(({ key, title, icon: Icon }) => {
+                            const sectionDetails = details[key];
+                            const sectionSummary = summaries[key];
+                            return (
+                              <div key={key} className="space-y-3 rounded-lg border bg-background/80 p-4 shadow-sm">
+                                <div className="flex items-center gap-2 text-sm font-semibold">
+                                  <Icon className="h-4 w-4 text-muted-foreground" />
+                                  {title}
+                                </div>
+                                <div className="space-y-3 text-sm">
+                                  {CHANGE_ORDER.map((category) => {
+                                    const IconBadge = CHANGE_ICONS[category];
+                                    const list = sectionDetails?.[category] ?? [];
+                                    const count = sectionSummary[category];
+                                    return (
+                                      <div key={category}>
+                                        <div className="flex items-center gap-2 font-semibold">
+                                          <IconBadge className={`h-4 w-4 ${category === 'deleted' ? 'text-rose-500' : 'text-muted-foreground'}`} />
+                                          <span>{CHANGE_LABELS[category]}</span>
+                                          <span className="ml-auto text-xs text-muted-foreground">{count}</span>
+                                        </div>
+                                        {list && list.length > 0 ? (
+                                          <ul className="mt-2 list-disc space-y-1 pl-6 text-xs text-muted-foreground">
+                                            {list.map((item, idx) => (
+                                              <li key={`${category}-${idx}`}>{item}</li>
+                                            ))}
+                                          </ul>
+                                        ) : (
+                                          <p className="mt-2 text-xs text-muted-foreground">No items in this category.</p>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="mt-4 text-sm text-muted-foreground">Expand to view detailed note changes.</div>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
 export default function Notes() {
   const [allFolders, setAllFolders] = useState<NotesAllFoldersResponse | null>(null);
@@ -22,9 +296,10 @@ export default function Notes() {
   const [success, setSuccess] = useState<string | null>(null);
   const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [simulationResult, setSimulationResult] = useState<any | null>(null);
+  const [simulationResult, setSimulationResult] = useState<SyncResponse | null>(null);
   const [mode, setMode] = useState<'auto' | 'manual'>('auto');
   const [showMappings, setShowMappings] = useState(false);
+  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
 
   const { activeSyncs } = useSyncStore();
   const activeSync = activeSyncs.get('notes');
@@ -103,6 +378,33 @@ export default function Notes() {
   };
 
   const handleSimulateSync = () => handleSync(true);
+
+  const simulationFolderResults = (simulationResult?.stats?.folder_results as SimulationFolderResult[]) || [];
+
+  const toggleFolderDetails = (folderKey: string) => {
+    setExpandedFolders((prev) => ({ ...prev, [folderKey]: !prev[folderKey] }));
+  };
+
+  if (!loading && config && config.notes_enabled === false) {
+    return (
+      <div className="max-w-4xl mx-auto space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Notes sync is disabled</CardTitle>
+            <CardDescription>Enable Notes sync in Settings to configure folders or run a sync.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Head to the Settings page and enable Notes sync to unlock folder mappings, simulations, and sync controls.
+            </p>
+            <Button asChild>
+              <Link to="/settings">Go to Settings</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const handleSaveMappings = async (mappings: Record<string, FolderMapping>) => {
     try {
@@ -330,31 +632,28 @@ export default function Notes() {
             <CardDescription>Preview of what would happen during sync</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {simulationResult.message && (
-                <div className="text-sm text-muted-foreground">{simulationResult.message}</div>
-              )}
-              {simulationResult.stats && (
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(simulationResult.stats).map(([key, value]) => (
-                    <Badge key={key} variant="outline">
-                      {key}: {String(value)}
-                    </Badge>
-                  ))}
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm text-muted-foreground">
+                  Preview covers {simulationResult.stats?.folder_count ?? simulationFolderResults.length} folder(s)
+                  {simulationResult.stats?.mapping_mode ? ' using manual mappings.' : '.'}
                 </div>
-              )}
-              <Button
-                onClick={() => setSimulationResult(null)}
-                variant="outline"
-                size="sm"
-              >
-                Dismiss
-              </Button>
+                <Button onClick={() => setSimulationResult(null)} variant="outline" size="sm">
+                  Dismiss
+                </Button>
+              </div>
+
+              <FolderResultsTable
+                folderResults={simulationFolderResults}
+                emptyMessage="Simulation finished without a folder-by-folder breakdown."
+                contextPrefix="simulation"
+                expandedState={expandedFolders}
+                onToggle={toggleFolderDetails}
+              />
             </div>
           </CardContent>
         </Card>
       )}
-
       {/* Folder Mappings */}
       <Card>
         <CardHeader>
@@ -413,7 +712,7 @@ export default function Notes() {
                           });
 
                           return Array.from(mergedFolders.entries())
-                            .filter(([_, info]) => info.apple || info.markdown)
+                            .filter(([, info]) => info.apple || info.markdown)
                             .map(([displayPath, info]) => (
                               <tr key={displayPath} className="border-b">
                                 <td className="p-3">
@@ -472,8 +771,11 @@ export default function Notes() {
             <div className="text-center text-muted-foreground">No sync history</div>
           ) : (
             <div className="space-y-3">
-              {history.map((log) => (
-                <div key={log.id} className="border-l-2 pl-4 py-2 space-y-1" style={{
+              {history.map((log) => {
+                const historyFolderResults = (log.stats?.folder_results as SimulationFolderResult[]) || [];
+                const historyFolderCount = log.stats?.folder_count ?? historyFolderResults.length;
+                return (
+                  <div key={log.id} className="border-l-2 pl-4 py-2 space-y-2" style={{
                   borderColor: log.status === 'completed' ? 'rgb(34 197 94)' :
                                log.status === 'failed' ? 'rgb(239 68 68)' :
                                'rgb(59 130 246)'
@@ -491,18 +793,26 @@ export default function Notes() {
                       <span>{log.duration_seconds}s</span>
                     )}
                   </div>
-                  {log.stats && Object.keys(log.stats).length > 0 && (
-                    <div className="grid grid-cols-2 gap-1 text-xs mt-2">
-                      {Object.entries(log.stats).map(([key, value]) => (
-                        <div key={key}>
-                          <span className="text-muted-foreground">{key}:</span>{' '}
-                          <span className="font-medium">{String(value)}</span>
-                        </div>
-                      ))}
+                  {historyFolderResults.length > 0 ? (
+                    <div className="rounded-lg border border-muted/60 bg-background/70 p-3">
+                      <div className="text-xs text-muted-foreground mb-3">
+                        Sync covered {historyFolderCount} folder(s)
+                        {log.stats?.mapping_mode ? ' using manual mappings.' : '.'}
+                      </div>
+                      <FolderResultsTable
+                        folderResults={historyFolderResults}
+                        emptyMessage="Sync finished without a folder-by-folder breakdown."
+                        contextPrefix={`history-${log.id}`}
+                        expandedState={expandedFolders}
+                        onToggle={toggleFolderDetails}
+                      />
                     </div>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">No folder-by-folder data captured for this sync.</div>
                   )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>

@@ -72,7 +72,7 @@ export interface ConfigValidationResponse {
 export interface ConnectionTestResponse {
   success: boolean;
   message: string;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
 }
 
 // Sync Operations
@@ -99,8 +99,8 @@ export interface PasswordsSyncRequest {
 export interface SyncResponse {
   status: string;
   message: string;
-  stats: Record<string, any>;
-  log_id: number;
+  stats: Record<string, unknown>;
+  log_id: number | null;
 }
 
 export interface SyncHistoryResponse {
@@ -117,7 +117,7 @@ export interface SyncLog {
   started_at: string;
   completed_at: string | null;
   duration_seconds: number | null;
-  stats: Record<string, any>;
+  stats: Record<string, unknown>;
   error_message: string | null;
 }
 
@@ -129,7 +129,7 @@ export interface Schedule {
   schedule_type: 'interval' | 'datetime';
   interval_minutes?: number;
   cron_expression?: string;
-  config_json: Record<string, any>;
+  config_json: Record<string, unknown>;
   enabled: boolean;
   last_run?: string;
   next_run?: string;
@@ -143,7 +143,7 @@ export interface ScheduleCreate {
   schedule_type: 'interval' | 'datetime';
   interval_minutes?: number;
   cron_expression?: string;
-  config_json: Record<string, any>;
+  config_json: Record<string, unknown>;
   enabled: boolean;
 }
 
@@ -153,7 +153,7 @@ export interface ScheduleUpdate {
   schedule_type?: 'interval' | 'datetime';
   interval_minutes?: number;
   cron_expression?: string;
-  config_json?: Record<string, any>;
+  config_json?: Record<string, unknown>;
 }
 
 // Settings
@@ -193,7 +193,7 @@ export interface RemindersStatusResponse {
 export interface WebSocketMessage {
   type: 'sync_progress' | 'log_entry' | 'schedule_run' | 'error' | 'status_update' | 'connection' | 'pong' | 'subscribed' | 'unsubscribed';
   service?: string;
-  data?: any;
+  data?: unknown;
   timestamp: string;
   status?: string;
   message?: string;
@@ -203,7 +203,7 @@ export interface SyncProgressMessage {
   status: 'running' | 'success' | 'error';
   progress: number;
   message: string;
-  stats?: Record<string, any>;
+  stats?: Record<string, unknown>;
 }
 
 export interface LogEntryMessage {
