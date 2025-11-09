@@ -286,6 +286,12 @@ app.add_typer(notes_app, name="notes")
 def notes_sync(
     ctx: typer.Context,
     folder: Optional[str] = typer.Option(None, "--folder", "-f", help="Sync specific folder only"),
+    mode: str = typer.Option(
+        "bidirectional",
+        "--mode",
+        "-m",
+        help="Sync direction: 'import' (Markdown → Apple Notes), 'export' (Apple Notes → Markdown), or 'bidirectional' (both ways)"
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Preview changes without applying them"),
     skip_deletions: bool = typer.Option(False, "--skip-deletions", help="Skip all deletion operations"),
     deletion_threshold: int = typer.Option(5, "--deletion-threshold", help="Max deletions before confirmation (use -1 to disable)"),
@@ -303,6 +309,12 @@ def notes_sync(
     """Synchronize notes between Apple Notes and markdown files."""
     cfg = ctx.obj["config"]
 
+    # Validate mode
+    valid_modes = {"import", "export", "bidirectional"}
+    if mode not in valid_modes:
+        console.print(f"[red]Invalid mode '{mode}'. Must be one of: {', '.join(valid_modes)}[/red]")
+        raise typer.Exit(1)
+
     # Check if notes sync is enabled
     if not cfg.notes.enabled:
         console.print("[red]Notes sync is not enabled in configuration[/red]")
@@ -317,6 +329,14 @@ def notes_sync(
 
     if dry_run:
         console.print("[cyan]DRY RUN MODE: Previewing changes only[/cyan]\n")
+
+    # Show mode if not bidirectional
+    if mode != "bidirectional":
+        mode_label = {
+            "import": "IMPORT ONLY (Markdown → Apple Notes)",
+            "export": "EXPORT ONLY (Apple Notes → Markdown)"
+        }
+        console.print(f"[yellow]{mode_label[mode]}[/yellow]\n")
 
     async def run_sync():
         # Initialize sync engine
@@ -335,39 +355,128 @@ def notes_sync(
             if migrated > 0:
                 console.print(f"[yellow]Migrated {migrated} root-level note(s) to 'Notes' folder[/yellow]\n")
 
-        # Get folders to sync
-        if folder:
-            folders_to_sync = [folder]
-            console.print(f"[cyan]Syncing folder:[/cyan] {folder}\n")
+        # Check if folder mappings are configured
+        using_mappings = bool(cfg.notes.folder_mappings) and not folder
+
+        if using_mappings:
+            # Use selective sync with folder mappings
+            console.print(f"[cyan]Using folder mappings ({len(cfg.notes.folder_mappings)} configured)[/cyan]\n")
+
+            # Convert FolderMapping objects to dict format
+            folder_mappings_dict = {}
+            for apple_folder, mapping_obj in cfg.notes.folder_mappings.items():
+                folder_mappings_dict[apple_folder] = {
+                    "markdown_folder": mapping_obj.markdown_folder,
+                    "mode": mapping_obj.mode
+                }
+
+            # Run sync with mappings
+            folder_results = await sync_engine.sync_with_mappings(
+                folder_mappings=folder_mappings_dict,
+                dry_run=dry_run,
+                skip_deletions=skip_deletions,
+                deletion_threshold=deletion_threshold,
+            )
+
+            # Convert results to match expected format
+            total_stats = {
+                "created_local": 0,
+                "created_remote": 0,
+                "updated_local": 0,
+                "updated_remote": 0,
+                "deleted_local": 0,
+                "deleted_remote": 0,
+                "unchanged": 0,
+                "would_delete_local": 0,
+                "would_delete_remote": 0,
+            }
+
+            for folder_name, stats in folder_results.items():
+                console.print(f"[bold]Folder:[/bold] {folder_name}")
+
+                if "error" in stats:
+                    console.print(f"  [red]✗ Failed: {stats['error']}[/red]")
+                    continue
+
+                # Aggregate stats
+                total_stats["created_local"] += stats.get("created_local", 0)
+                total_stats["created_remote"] += stats.get("created_remote", 0)
+                total_stats["updated_local"] += stats.get("updated_local", 0)
+                total_stats["updated_remote"] += stats.get("updated_remote", 0)
+                total_stats["deleted_local"] += stats.get("deleted_local", 0)
+                total_stats["deleted_remote"] += stats.get("deleted_remote", 0)
+                total_stats["unchanged"] += stats.get("unchanged", 0)
+                total_stats["would_delete_local"] += stats.get("would_delete_local", 0)
+                total_stats["would_delete_remote"] += stats.get("would_delete_remote", 0)
+
+                # Show folder stats
+                if dry_run:
+                    if any(stats.get(k, 0) > 0 for k in ["created_local", "created_remote", "updated_local", "updated_remote", "would_delete_local", "would_delete_remote"]):
+                        console.print(
+                            f"  [yellow]Preview:[/yellow] "
+                            f"{stats.get('created_remote', 0)} would create, "
+                            f"{stats.get('updated_remote', 0)} would update, "
+                            f"{stats.get('would_delete_remote', 0)} would delete (remote)"
+                        )
+                        console.print(
+                            f"  [yellow]Preview:[/yellow] "
+                            f"{stats.get('created_local', 0)} would create, "
+                            f"{stats.get('updated_local', 0)} would update, "
+                            f"{stats.get('would_delete_local', 0)} would delete (local)"
+                        )
+                    else:
+                        console.print(f"  [dim]No changes needed ({stats.get('unchanged', 0)} unchanged)[/dim]")
+                elif any(stats.get(k, 0) > 0 for k in ["created_local", "created_remote", "updated_local", "updated_remote", "deleted_local", "deleted_remote"]):
+                    console.print(
+                        f"  [green]✓[/green] "
+                        f"{stats.get('created_remote', 0)} created, "
+                        f"{stats.get('updated_remote', 0)} updated, "
+                        f"{stats.get('deleted_remote', 0)} deleted (remote)"
+                    )
+                    console.print(
+                        f"  [green]✓[/green] "
+                        f"{stats.get('created_local', 0)} created, "
+                        f"{stats.get('updated_local', 0)} updated, "
+                        f"{stats.get('deleted_local', 0)} deleted (local)"
+                    )
+                else:
+                    console.print(f"  [dim]No changes needed ({stats.get('unchanged', 0)} unchanged)[/dim]")
+
         else:
-            console.print("[cyan]Fetching folders from Apple Notes...[/cyan]")
-            all_folders = await sync_engine.list_folders()
-            folders_to_sync = [f["name"] for f in all_folders]
-            console.print(f"[green]Found {len(folders_to_sync)} folders[/green]\n")
+            # Auto 1:1 sync or single folder sync
+            if folder:
+                folders_to_sync = [folder]
+                console.print(f"[cyan]Syncing folder:[/cyan] {folder}\n")
+            else:
+                console.print("[cyan]Fetching folders from Apple Notes...[/cyan]")
+                all_folders = await sync_engine.list_folders()
+                folders_to_sync = [f["name"] for f in all_folders]
+                console.print(f"[green]Found {len(folders_to_sync)} folders[/green]\n")
 
-        # Sync each folder
-        total_stats = {
-            "created_local": 0,
-            "created_remote": 0,
-            "updated_local": 0,
-            "updated_remote": 0,
-            "deleted_local": 0,
-            "deleted_remote": 0,
-            "unchanged": 0,
-            "would_delete_local": 0,
-            "would_delete_remote": 0,
-        }
+            # Sync each folder
+            total_stats = {
+                "created_local": 0,
+                "created_remote": 0,
+                "updated_local": 0,
+                "updated_remote": 0,
+                "deleted_local": 0,
+                "deleted_remote": 0,
+                "unchanged": 0,
+                "would_delete_local": 0,
+                "would_delete_remote": 0,
+            }
 
-        for folder_name in folders_to_sync:
-            try:
-                console.print(f"[bold]Syncing folder:[/bold] {folder_name}")
-                stats = await sync_engine.sync_folder(
-                    folder_name,
-                    folder_name,
-                    dry_run=dry_run,
-                    skip_deletions=skip_deletions,
-                    deletion_threshold=deletion_threshold,
-                )
+            for folder_name in folders_to_sync:
+                try:
+                    console.print(f"[bold]Syncing folder:[/bold] {folder_name}")
+                    stats = await sync_engine.sync_folder(
+                        folder_name,
+                        folder_name,
+                        dry_run=dry_run,
+                        skip_deletions=skip_deletions,
+                        deletion_threshold=deletion_threshold,
+                        sync_mode=mode,
+                    )
 
                 # Aggregate stats
                 for key in total_stats:

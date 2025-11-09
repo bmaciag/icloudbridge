@@ -44,6 +44,33 @@ async def list_folders(engine: NotesSyncEngineDep):
         )
 
 
+@router.get("/folders/all")
+async def get_all_folders(engine: NotesSyncEngineDep):
+    """Get all folders from both Apple Notes and Markdown sources.
+
+    Returns hierarchical folder information with existence indicators.
+    Useful for UI that needs to show which folders exist where.
+
+    Returns:
+        Dictionary mapping folder paths to source indicators:
+        {
+            "Work": {"apple": True, "markdown": True},
+            "Work/Projects": {"apple": True, "markdown": False},
+            "Personal": {"apple": True, "markdown": True},
+            "Configs": {"apple": False, "markdown": True}
+        }
+    """
+    try:
+        folders_info = await engine.get_all_folders()
+        return {"folders": folders_info}
+    except Exception as e:
+        logger.error(f"Failed to get all folders: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get all folders: {str(e)}"
+        )
+
+
 @router.post("/sync")
 async def sync_notes(
     request: NotesSyncRequest,
@@ -100,58 +127,117 @@ async def sync_notes(
     try:
         # Handle all-folders sync vs single folder sync
         if request.folder:
-            # Single folder sync (existing behavior)
+            # Single folder sync
             result = await engine.sync_folder(
                 folder_name=request.folder,
                 markdown_subfolder=None,
                 dry_run=request.dry_run,
                 skip_deletions=request.skip_deletions,
                 deletion_threshold=request.deletion_threshold,
+                sync_mode=request.mode,
             )
         else:
-            # All-folders sync (NEW)
-            folders = await engine.list_folders()
+            # All-folders sync
+            # Check if folder mappings are configured
+            if config.notes.folder_mappings:
+                # Use selective sync with mappings
+                logger.info(f"Using folder mappings for selective sync ({len(config.notes.folder_mappings)} mappings)")
 
-            # Initialize aggregated statistics
-            total_stats = {
-                "created": 0,
-                "updated": 0,
-                "deleted": 0,
-                "unchanged": 0,
-                "errors": 0
-            }
-            folder_results = []
+                # Convert FolderMapping objects to dict format expected by sync_with_mappings
+                folder_mappings_dict = {}
+                for apple_folder, mapping_obj in config.notes.folder_mappings.items():
+                    folder_mappings_dict[apple_folder] = {
+                        "markdown_folder": mapping_obj.markdown_folder,
+                        "mode": mapping_obj.mode
+                    }
 
-            for folder_info in folders:
-                folder_name = folder_info["name"]
-                try:
-                    folder_result = await engine.sync_folder(
-                        folder_name=folder_name,
-                        markdown_subfolder=None,
-                        dry_run=request.dry_run,
-                        skip_deletions=request.skip_deletions,
-                        deletion_threshold=request.deletion_threshold,
-                    )
+                folder_results = await engine.sync_with_mappings(
+                    folder_mappings=folder_mappings_dict,
+                    dry_run=request.dry_run,
+                    skip_deletions=request.skip_deletions,
+                    deletion_threshold=request.deletion_threshold,
+                )
 
-                    # Aggregate statistics
-                    total_stats["created"] += folder_result.get("created", 0)
-                    total_stats["updated"] += folder_result.get("updated", 0)
-                    total_stats["deleted"] += folder_result.get("deleted", 0)
-                    total_stats["unchanged"] += folder_result.get("unchanged", 0)
+                # Convert results to match expected format
+                total_stats = {
+                    "created": 0,
+                    "updated": 0,
+                    "deleted": 0,
+                    "unchanged": 0,
+                    "errors": 0
+                }
+                formatted_results = []
 
-                    folder_results.append({
-                        "folder": folder_name,
-                        "status": "success",
-                        "stats": folder_result
-                    })
-                except Exception as e:
-                    total_stats["errors"] += 1
-                    folder_results.append({
-                        "folder": folder_name,
-                        "status": "error",
-                        "error": str(e)
-                    })
-                    logger.error(f"Failed to sync folder {folder_name}: {e}")
+                for folder_name, stats in folder_results.items():
+                    if "error" in stats:
+                        total_stats["errors"] += 1
+                        formatted_results.append({
+                            "folder": folder_name,
+                            "status": "error",
+                            "error": stats["error"]
+                        })
+                    else:
+                        total_stats["created"] += stats.get("created_local", 0) + stats.get("created_remote", 0)
+                        total_stats["updated"] += stats.get("updated_local", 0) + stats.get("updated_remote", 0)
+                        total_stats["deleted"] += stats.get("deleted_local", 0) + stats.get("deleted_remote", 0)
+                        total_stats["unchanged"] += stats.get("unchanged", 0)
+                        formatted_results.append({
+                            "folder": folder_name,
+                            "status": "success",
+                            "stats": stats
+                        })
+
+                result = total_stats.copy()
+                result["folder_count"] = len(folder_results)
+                result["folder_results"] = formatted_results
+                result["mapping_mode"] = True
+
+            else:
+                # Auto 1:1 sync for all folders
+                logger.info("Using automatic 1:1 folder sync")
+                folders = await engine.list_folders()
+
+                # Initialize aggregated statistics
+                total_stats = {
+                    "created": 0,
+                    "updated": 0,
+                    "deleted": 0,
+                    "unchanged": 0,
+                    "errors": 0
+                }
+                folder_results = []
+
+                for folder_info in folders:
+                    folder_name = folder_info["name"]
+                    try:
+                        folder_result = await engine.sync_folder(
+                            folder_name=folder_name,
+                            markdown_subfolder=None,
+                            dry_run=request.dry_run,
+                            skip_deletions=request.skip_deletions,
+                            deletion_threshold=request.deletion_threshold,
+                            sync_mode=request.mode,
+                        )
+
+                        # Aggregate statistics
+                        total_stats["created"] += folder_result.get("created", 0)
+                        total_stats["updated"] += folder_result.get("updated", 0)
+                        total_stats["deleted"] += folder_result.get("deleted", 0)
+                        total_stats["unchanged"] += folder_result.get("unchanged", 0)
+
+                        folder_results.append({
+                            "folder": folder_name,
+                            "status": "success",
+                            "stats": folder_result
+                        })
+                    except Exception as e:
+                        total_stats["errors"] += 1
+                        folder_results.append({
+                            "folder": folder_name,
+                            "status": "error",
+                            "error": str(e)
+                        })
+                        logger.error(f"Failed to sync folder {folder_name}: {e}")
 
             # Create aggregated result
             result = total_stats.copy()

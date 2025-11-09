@@ -94,6 +94,7 @@ class ConfigResponse(BaseModel):
     reminders_enabled: bool
     passwords_enabled: bool
     notes_remote_folder: str | None = None
+    notes_folder_mappings: dict[str, dict[str, str]] = Field(default_factory=dict)
     reminders_caldav_url: str | None = None
     reminders_caldav_username: str | None = None
     reminders_sync_mode: str | None = None
@@ -110,6 +111,7 @@ class ConfigUpdateRequest(BaseModel):
     reminders_enabled: bool | None = None
     passwords_enabled: bool | None = None
     notes_remote_folder: str | None = None
+    notes_folder_mappings: dict[str, dict[str, str]] | None = None
     reminders_caldav_url: str | None = None
     reminders_caldav_username: str | None = None
     reminders_caldav_password: str | None = Field(
@@ -143,6 +145,10 @@ class NotesSyncRequest(BaseModel):
         default=None,
         description="Specific folder to sync, or None to sync all folders"
     )
+    mode: str = Field(
+        default="bidirectional",
+        description="Sync direction: 'import' (Markdown → Apple Notes), 'export' (Apple Notes → Markdown), or 'bidirectional' (both ways)"
+    )
     dry_run: bool = Field(
         default=False,
         description="Preview changes without applying them"
@@ -163,6 +169,26 @@ class NotesSyncRequest(BaseModel):
         default=None,
         description="Override shortcut pipeline preference (None = use config default, True/False = override)"
     )
+
+
+class NotesAllFoldersResponse(BaseModel):
+    """Response model for all folders (both Apple Notes and Markdown)."""
+
+    folders: dict[str, dict[str, bool]] = Field(
+        description="Dictionary mapping folder paths to source indicators"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "folders": {
+                    "Work": {"apple": True, "markdown": True},
+                    "Work/Projects": {"apple": True, "markdown": False},
+                    "Personal": {"apple": True, "markdown": True},
+                    "Configs": {"apple": False, "markdown": True}
+                }
+            }
+        }
 
 
 class RemindersSyncRequest(BaseModel):

@@ -1,25 +1,30 @@
 import { useEffect, useState } from 'react';
-import { FileText, RefreshCw, Upload, Download, Trash2, AlertTriangle, ExternalLink } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { FileText, RefreshCw, Trash2, AlertTriangle, PlayCircle, ChevronDown, FolderOpen } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
+import { Label } from '@/components/ui/label';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { FolderMappingTable } from '@/components/FolderMappingTable';
 import apiClient from '@/lib/api-client';
 import { useSyncStore } from '@/store/sync-store';
-import type { NotesFolder, SyncLog, SetupVerificationResponse } from '@/types/api';
+import type { SyncLog, SetupVerificationResponse, NotesAllFoldersResponse, FolderMapping, AppConfig } from '@/types/api';
 
 export default function Notes() {
-  const [folders, setFolders] = useState<NotesFolder[]>([]);
+  const [allFolders, setAllFolders] = useState<NotesAllFoldersResponse | null>(null);
   const [history, setHistory] = useState<SyncLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [simulating, setSimulating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [mode, setMode] = useState<'import' | 'export' | 'bidirectional'>('bidirectional');
   const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
+  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [simulationResult, setSimulationResult] = useState<any | null>(null);
+  const [mode, setMode] = useState<'auto' | 'manual'>('auto');
+  const [showMappings, setShowMappings] = useState(false);
 
   const { activeSyncs } = useSyncStore();
   const activeSync = activeSyncs.get('notes');
@@ -29,15 +34,25 @@ export default function Notes() {
     loadVerification();
   }, []);
 
+  // Set to manual mode if there are existing mappings
+  useEffect(() => {
+    if (config?.notes_folder_mappings && Object.keys(config.notes_folder_mappings).length > 0) {
+      setMode('manual');
+      setShowMappings(true);
+    }
+  }, [config]);
+
   const loadData = async () => {
     try {
       setLoading(true);
-      const [foldersData, historyData] = await Promise.all([
-        apiClient.getNotesFolders(),
+      const [allFoldersData, historyData, configData] = await Promise.all([
+        apiClient.getAllNotesFolders(),
         apiClient.getNotesHistory(10),
+        apiClient.getConfig(),
       ]);
-      setFolders(foldersData);
+      setAllFolders(allFoldersData);
       setHistory(historyData.logs);
+      setConfig(configData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load data');
     } finally {
@@ -54,20 +69,55 @@ export default function Notes() {
     }
   };
 
-  const handleSync = async () => {
+  const handleSync = async (dryRun: boolean = false) => {
     try {
-      setSyncing(true);
+      if (dryRun) {
+        setSimulating(true);
+        setSimulationResult(null);
+      } else {
+        setSyncing(true);
+      }
       setError(null);
       setSuccess(null);
 
-      const result = await apiClient.syncNotes({ mode });
+      const result = await apiClient.syncNotes({
+        dry_run: dryRun,
+      });
 
-      setSuccess(`Sync completed: ${result.message}`);
+      if (dryRun) {
+        setSimulationResult(result);
+        setSuccess('Simulation completed - see results below');
+      } else {
+        setSuccess(`Sync completed: ${result.message}`);
+        await loadData();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : (dryRun ? 'Simulation failed' : 'Sync failed'));
+    } finally {
+      if (dryRun) {
+        setSimulating(false);
+      } else {
+        setSyncing(false);
+      }
+    }
+  };
+
+  const handleSimulateSync = () => handleSync(true);
+
+  const handleSaveMappings = async (mappings: Record<string, FolderMapping>) => {
+    try {
+      setError(null);
+      setSuccess(null);
+
+      await apiClient.updateConfig({
+        notes_folder_mappings: mappings,
+      });
+
+      setSuccess('Folder mappings saved successfully');
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sync failed');
-    } finally {
-      setSyncing(false);
+      setError(err instanceof Error ? err.message : 'Failed to save mappings');
+      throw err; // Re-throw so FolderMappingTable knows it failed
     }
   };
 
@@ -197,48 +247,37 @@ export default function Notes() {
       <Card>
         <CardHeader>
           <CardTitle>Sync Configuration</CardTitle>
-          <CardDescription>Configure and run notes synchronization</CardDescription>
+          <CardDescription>Configure and run notes synchronisation</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <Label>Sync Mode</Label>
             <div className="flex gap-2">
               <Button
-                variant={mode === 'import' ? 'default' : 'outline'}
-                onClick={() => setMode('import')}
+                variant={mode === 'auto' ? 'default' : 'outline'}
+                onClick={() => setMode('auto')}
                 className="flex-1"
               >
-                <Download className="w-4 h-4 mr-2" />
-                Import
+                Auto
               </Button>
               <Button
-                variant={mode === 'export' ? 'default' : 'outline'}
-                onClick={() => setMode('export')}
+                variant={mode === 'manual' ? 'default' : 'outline'}
+                onClick={() => setMode('manual')}
                 className="flex-1"
               >
-                <Upload className="w-4 h-4 mr-2" />
-                Export
-              </Button>
-              <Button
-                variant={mode === 'bidirectional' ? 'default' : 'outline'}
-                onClick={() => setMode('bidirectional')}
-                className="flex-1"
-              >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                Bidirectional
+                Manual
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              {mode === 'import' && 'Import notes from iCloud to markdown files'}
-              {mode === 'export' && 'Export markdown files to iCloud Notes'}
-              {mode === 'bidirectional' && 'Two-way sync between iCloud and markdown files'}
+              {mode === 'auto' && 'Automatically sync all Apple Notes folders to markdown folders with matching names using 1:1 mapping.'}
+              {mode === 'manual' && 'Manually configure which Apple Notes folders sync to which markdown folders. Only mapped folders will sync.'}
             </p>
           </div>
 
           <div className="flex gap-2">
             <Button
-              onClick={handleSync}
-              disabled={syncing || !!activeSync}
+              onClick={() => handleSync(false)}
+              disabled={syncing || simulating || !!activeSync}
               className="flex-1"
             >
               {syncing || activeSync ? (
@@ -254,9 +293,27 @@ export default function Notes() {
               )}
             </Button>
             <Button
+              onClick={handleSimulateSync}
+              disabled={syncing || simulating || !!activeSync}
+              variant="outline"
+              className="flex-1"
+            >
+              {simulating ? (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Simulating...
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="w-4 h-4 mr-2" />
+                  Simulate Sync
+                </>
+              )}
+            </Button>
+            <Button
               onClick={handleReset}
               variant="destructive"
-              disabled={loading || syncing}
+              disabled={loading || syncing || simulating}
             >
               <Trash2 className="w-4 h-4 mr-2" />
               Reset
@@ -265,32 +322,141 @@ export default function Notes() {
         </CardContent>
       </Card>
 
-      {/* Folders */}
+      {/* Simulation Results */}
+      {simulationResult && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Simulation Results</CardTitle>
+            <CardDescription>Preview of what would happen during sync</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {simulationResult.message && (
+                <div className="text-sm text-muted-foreground">{simulationResult.message}</div>
+              )}
+              {simulationResult.stats && (
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(simulationResult.stats).map(([key, value]) => (
+                    <Badge key={key} variant="outline">
+                      {key}: {String(value)}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              <Button
+                onClick={() => setSimulationResult(null)}
+                variant="outline"
+                size="sm"
+              >
+                Dismiss
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Folder Mappings */}
       <Card>
         <CardHeader>
-          <CardTitle>Notes Folders</CardTitle>
-          <CardDescription>Available folders in your Notes.app</CardDescription>
+          <CardTitle>Folder Mappings</CardTitle>
+          <CardDescription>
+            {mode === 'auto'
+              ? 'View automatic folder mappings (read-only)'
+              : 'Configure which Apple Notes folders sync to which markdown folders'}
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          {loading ? (
-            <div className="text-center text-muted-foreground">Loading...</div>
-          ) : folders.length === 0 ? (
-            <div className="text-center text-muted-foreground">No folders found</div>
-          ) : (
-            <div className="space-y-2">
-              {folders.map((folder) => (
-                <div
-                  key={folder.name}
-                  className="flex items-center justify-between p-3 border rounded-lg"
-                >
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-muted-foreground" />
-                    <span>{folder.name}</span>
+          {mode === 'auto' ? (
+            <Collapsible open={showMappings} onOpenChange={setShowMappings}>
+              <CollapsibleTrigger asChild>
+                <Button variant="outline" className="w-full flex justify-between items-center">
+                  <span>View Automatic Mappings</span>
+                  <ChevronDown className={`h-4 w-4 transition-transform ${showMappings ? 'rotate-180' : ''}`} />
+                </Button>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="pt-4">
+                {loading || !allFolders ? (
+                  <div className="text-center text-muted-foreground">Loading...</div>
+                ) : Object.keys(allFolders.folders).length === 0 ? (
+                  <div className="text-center text-muted-foreground">No folders found</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left p-3 font-medium">Apple Notes Folder</th>
+                          <th className="text-left p-3 font-medium">Markdown Folder</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          // Merge folders by normalized path to avoid duplicates
+                          const mergedFolders = new Map<string, { apple: boolean; markdown: boolean }>();
+
+                          Object.entries(allFolders.folders).forEach(([path, info]) => {
+                            // Normalize path by removing iCloud/ prefix
+                            const normalizedPath = path.startsWith('iCloud/') ? path.slice(7) : path;
+
+                            // Merge info for the same normalized path
+                            const existing = mergedFolders.get(normalizedPath);
+                            if (existing) {
+                              mergedFolders.set(normalizedPath, {
+                                apple: existing.apple || info.apple,
+                                markdown: existing.markdown || info.markdown,
+                              });
+                            } else {
+                              mergedFolders.set(normalizedPath, {
+                                apple: info.apple,
+                                markdown: info.markdown,
+                              });
+                            }
+                          });
+
+                          return Array.from(mergedFolders.entries())
+                            .filter(([_, info]) => info.apple || info.markdown)
+                            .map(([displayPath, info]) => (
+                              <tr key={displayPath} className="border-b">
+                                <td className="p-3">
+                                  <div className="flex items-center gap-2">
+                                    <FolderOpen className="w-4 h-4 text-muted-foreground" />
+                                    <span className="font-medium">{displayPath}</span>
+                                    {!info.apple && info.markdown && (
+                                      <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
+                                        Will be created
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="p-3">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-muted-foreground">{displayPath}</span>
+                                    {info.apple && !info.markdown && (
+                                      <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
+                                        Will be created
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            ));
+                        })()}
+                      </tbody>
+                    </table>
                   </div>
-                  <Badge variant="outline">{folder.note_count} notes</Badge>
-                </div>
-              ))}
-            </div>
+                )}
+              </CollapsibleContent>
+            </Collapsible>
+          ) : (
+            loading || !allFolders || !config ? (
+              <div className="text-center text-muted-foreground py-8">Loading folders...</div>
+            ) : (
+              <FolderMappingTable
+                folders={allFolders.folders}
+                mappings={config.notes_folder_mappings || {}}
+                onSave={handleSaveMappings}
+                manualMappingEnabled={mode === 'manual'}
+              />
+            )
           )}
         </CardContent>
       </Card>

@@ -15,6 +15,30 @@ class FolderConfig(BaseSettings):
     enabled: bool = True
 
 
+class FolderMapping(BaseSettings):
+    """Mapping configuration for a notes folder sync.
+
+    Attributes:
+        markdown_folder: Path to the markdown folder (relative to remote_folder base).
+                        Can be nested, e.g., "Work/Projects"
+        mode: Sync direction - 'import' (Markdown → Apple Notes),
+              'export' (Apple Notes → Markdown), or 'bidirectional' (both ways)
+    """
+
+    markdown_folder: str
+    mode: str = "bidirectional"
+
+    @field_validator("mode", mode="before")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        """Validate sync mode."""
+        valid_modes = {"import", "export", "bidirectional"}
+        v = v.lower()
+        if v not in valid_modes:
+            raise ValueError(f"Sync mode must be one of: {', '.join(valid_modes)}")
+        return v
+
+
 class ListConfig(BaseSettings):
     """Configuration for a single reminder list."""
 
@@ -29,6 +53,11 @@ class NotesConfig(BaseSettings):
     remote_folder: Path | None = None
     folders: dict[str, FolderConfig] = Field(default_factory=dict)
     use_shortcuts_for_push: bool = True
+
+    # Folder mappings: Apple Notes folder → {markdown_folder, mode}
+    # When configured, disables automatic 1:1 folder mapping.
+    # Example: {"Work Stuff": {"markdown_folder": "Work", "mode": "bidirectional"}}
+    folder_mappings: dict[str, FolderMapping] = Field(default_factory=dict)
 
     @field_validator("remote_folder", mode="before")
     @classmethod

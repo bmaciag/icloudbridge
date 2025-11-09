@@ -136,12 +136,48 @@ class MarkdownAdapter:
             metadata = {}
         return metadata, remainder
 
-    async def list_notes(self, folder_name: str | None = None) -> list[Path]:
+    async def list_folders(self) -> list[str]:
+        """
+        List all folders containing markdown files.
+
+        Returns hierarchical folder paths relative to base_path.
+        For example: ["Work", "Work/Projects", "Personal", "Recipes"]
+
+        Returns:
+            List of folder paths (relative to base_path)
+        """
+        if not self.base_path.exists():
+            logger.debug(f"Base path does not exist: {self.base_path}")
+            return []
+
+        folders = set()
+
+        # Find all markdown files recursively
+        for md_file in self.base_path.rglob("*.md"):
+            # Get the folder containing this markdown file
+            if md_file.parent != self.base_path:
+                # Get the relative path from base_path to the parent folder
+                rel_path = md_file.parent.relative_to(self.base_path)
+                folder_path = str(rel_path)
+                folders.add(folder_path)
+
+                # Also add all parent folders in the hierarchy
+                parts = rel_path.parts
+                for i in range(1, len(parts)):
+                    parent_path = str(Path(*parts[:i]))
+                    folders.add(parent_path)
+
+        folder_list = sorted(folders)
+        logger.info(f"Found {len(folder_list)} markdown folders")
+        return folder_list
+
+    async def list_notes(self, folder_name: str | None = None, recursive: bool = False) -> list[Path]:
         """
         List all markdown files in a folder.
 
         Args:
-            folder_name: Subfolder name, or None for base folder
+            folder_name: Subfolder name (can be nested, e.g., "Work/Projects"), or None for base folder
+            recursive: If True, recursively search nested folders
 
         Returns:
             List of paths to .md files
@@ -155,8 +191,12 @@ class MarkdownAdapter:
             logger.debug(f"Folder does not exist: {search_path}")
             return []
 
-        # Find all .md files (non-recursive for now)
-        md_files = list(search_path.glob("*.md"))
+        # Find all .md files (recursive or not)
+        if recursive:
+            md_files = list(search_path.rglob("*.md"))
+        else:
+            md_files = list(search_path.glob("*.md"))
+
         logger.info(f"Found {len(md_files)} markdown files in {search_path}")
         return md_files
 
@@ -312,7 +352,11 @@ class MarkdownAdapter:
         try:
             # If renaming, use write_note to create new file and delete old
             if note_name and note_name != file_path.stem:
-                folder_name = file_path.parent.name if file_path.parent != self.base_path else None
+                # Get full nested folder path relative to base_path
+                if file_path.parent != self.base_path:
+                    folder_name = str(file_path.parent.relative_to(self.base_path))
+                else:
+                    folder_name = None
                 new_path = await self.write_note(
                     note_name,
                     body_html,

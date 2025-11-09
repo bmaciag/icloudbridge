@@ -26,6 +26,21 @@ export interface StatusResponse {
   active_schedules: number;
 }
 
+// Folder Mapping
+export interface FolderMapping {
+  markdown_folder: string;
+  mode: 'import' | 'export' | 'bidirectional';
+}
+
+export interface FolderInfo {
+  apple: boolean;
+  markdown: boolean;
+}
+
+export interface NotesAllFoldersResponse {
+  folders: Record<string, FolderInfo>;
+}
+
 // Configuration
 export interface AppConfig {
   data_dir: string;
@@ -33,6 +48,7 @@ export interface AppConfig {
   icloud_username?: string;
   notes_enabled: boolean;
   notes_remote_folder?: string;
+  notes_folder_mappings?: Record<string, FolderMapping>;
   reminders_enabled: boolean;
   reminders_sync_mode?: 'auto' | 'manual';
   reminders_caldav_url?: string;

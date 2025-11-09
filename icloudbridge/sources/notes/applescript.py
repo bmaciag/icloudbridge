@@ -18,7 +18,7 @@ from icloudbridge.core.rich_notes_capture import (
 logger = logging.getLogger(__name__)
 
 
-# AppleScript to list all note folders
+# AppleScript to list all note folders with hierarchy
 LIST_FOLDERS_SCRIPT = """
 tell application "Notes"
     set output to ""
@@ -26,23 +26,80 @@ tell application "Notes"
     repeat with n_folder in n_folders
         set folder_id to id of n_folder
         set folder_name to name of n_folder
+
+        -- Build full path by traversing up the hierarchy
+        set full_path to folder_name
+        set current_folder to n_folder
+        set parent_container to missing value
+
+        try
+            set parent_container to container of current_folder
+        end try
+
+        -- Walk up the folder hierarchy to build full path
+        repeat while parent_container is not missing value
+            try
+                set parent_name to name of parent_container
+                set full_path to parent_name & "/" & full_path
+                set parent_container to container of parent_container
+            on error
+                set parent_container to missing value
+            end try
+        end repeat
+
         if output is "" then
             set token to ""
         else
             set token to "|"
         end if
-        set output to output & token & folder_id & "~~" & folder_name
+        set output to output & token & folder_id & "~~" & full_path
     end repeat
     return output
 end tell
 """
 
-# AppleScript to get all notes from a folder (simplified - no staged files!)
+# AppleScript to get all notes from a folder (supports nested paths)
 GET_NOTES_SCRIPT = """
 on run argv
-    set folder_name to item 1 of argv
+    set folder_path to item 1 of argv
     tell application "Notes"
-        set myFolder to first folder whose name = folder_name
+        -- Handle nested folder paths (e.g., "Work/Projects")
+        set path_parts to my split_text(folder_path, "/")
+        set myFolder to missing value
+
+        -- Find folder by matching full path
+        set all_folders to get every folder
+        repeat with test_folder in all_folders
+            set test_name to name of test_folder
+
+            -- Build full path for this folder
+            set test_path to test_name
+            set test_container to missing value
+            try
+                set test_container to container of test_folder
+            end try
+
+            repeat while test_container is not missing value
+                try
+                    set parent_name to name of test_container
+                    set test_path to parent_name & "/" & test_path
+                    set test_container to container of test_container
+                on error
+                    set test_container to missing value
+                end try
+            end repeat
+
+            -- Check if this is the folder we're looking for
+            if test_path = folder_path then
+                set myFolder to test_folder
+                exit repeat
+            end if
+        end repeat
+
+        if myFolder is missing value then
+            error "Folder not found: " & folder_path
+        end if
+
         set myNotes to notes of myFolder
         set output to ""
         repeat with theNote in myNotes
@@ -59,18 +116,60 @@ on run argv
         return output
     end tell
 end run
+
+on split_text(theText, theDelimiter)
+    set AppleScript's text item delimiters to theDelimiter
+    set theTextItems to every text item of theText
+    set AppleScript's text item delimiters to ""
+    return theTextItems
+end split_text
 """
 
-# AppleScript to create a new note
+# AppleScript to create a new note (supports nested folder paths)
 CREATE_NOTE_SCRIPT = """
 on run argv
-    set {note_folder, note_name, export_file} to {item 1, item 2, item 3} of argv
+    set {folder_path, note_name, export_file} to {item 1, item 2, item 3} of argv
 
     -- Read the entire HTML content from file
     set html_content to read POSIX file export_file as «class utf8»
 
     tell application "Notes"
-        tell folder note_folder
+        -- Find folder by matching full path
+        set target_folder to missing value
+        set all_folders to get every folder
+
+        repeat with test_folder in all_folders
+            set test_name to name of test_folder
+
+            -- Build full path for this folder
+            set test_path to test_name
+            set test_container to missing value
+            try
+                set test_container to container of test_folder
+            end try
+
+            repeat while test_container is not missing value
+                try
+                    set parent_name to name of test_container
+                    set test_path to parent_name & "/" & test_path
+                    set test_container to container of test_container
+                on error
+                    set test_container to missing value
+                end try
+            end repeat
+
+            -- Check if this is the folder we're looking for
+            if test_path = folder_path then
+                set target_folder to test_folder
+                exit repeat
+            end if
+        end repeat
+
+        if target_folder is missing value then
+            error "Folder not found: " & folder_path
+        end if
+
+        tell target_folder
             set theNote to make new note
             tell theNote
                 -- Set body directly (title already in content from markdown converter)
@@ -85,16 +184,51 @@ end run
 """
 
 
-# AppleScript to update an existing note
+# AppleScript to update an existing note (supports nested folder paths)
 UPDATE_NOTE_SCRIPT = """
 on run argv
-    set {note_folder, note_name, export_file} to {item 1, item 2, item 3} of argv
+    set {folder_path, note_name, export_file} to {item 1, item 2, item 3} of argv
 
     -- Read the entire HTML content from file
     set html_content to read POSIX file export_file as «class utf8»
 
     tell application "Notes"
-        tell folder note_folder
+        -- Find folder by matching full path
+        set target_folder to missing value
+        set all_folders to get every folder
+
+        repeat with test_folder in all_folders
+            set test_name to name of test_folder
+
+            -- Build full path for this folder
+            set test_path to test_name
+            set test_container to missing value
+            try
+                set test_container to container of test_folder
+            end try
+
+            repeat while test_container is not missing value
+                try
+                    set parent_name to name of test_container
+                    set test_path to parent_name & "/" & test_path
+                    set test_container to container of test_container
+                on error
+                    set test_container to missing value
+                end try
+            end repeat
+
+            -- Check if this is the folder we're looking for
+            if test_path = folder_path then
+                set target_folder to test_folder
+                exit repeat
+            end if
+        end repeat
+
+        if target_folder is missing value then
+            error "Folder not found: " & folder_path
+        end if
+
+        tell target_folder
             set theNote to note note_name
             tell theNote
                 -- Set body directly (title already in content from markdown converter)
@@ -108,12 +242,47 @@ end run
 """
 
 
-# AppleScript to delete a note
+# AppleScript to delete a note (supports nested folder paths)
 DELETE_NOTE_SCRIPT = """
 on run argv
-    set {note_folder, note_name} to {item 1, item 2} of argv
+    set {folder_path, note_name} to {item 1, item 2} of argv
     tell application "Notes"
-        tell folder note_folder
+        -- Find folder by matching full path
+        set target_folder to missing value
+        set all_folders to get every folder
+
+        repeat with test_folder in all_folders
+            set test_name to name of test_folder
+
+            -- Build full path for this folder
+            set test_path to test_name
+            set test_container to missing value
+            try
+                set test_container to container of test_folder
+            end try
+
+            repeat while test_container is not missing value
+                try
+                    set parent_name to name of test_container
+                    set test_path to parent_name & "/" & test_path
+                    set test_container to container of test_container
+                on error
+                    set test_container to missing value
+                end try
+            end repeat
+
+            -- Check if this is the folder we're looking for
+            if test_path = folder_path then
+                set target_folder to test_folder
+                exit repeat
+            end if
+        end repeat
+
+        if target_folder is missing value then
+            error "Folder not found: " & folder_path
+        end if
+
+        tell target_folder
             set theNote to note note_name
             delete theNote
         end tell

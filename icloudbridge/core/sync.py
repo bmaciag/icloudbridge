@@ -150,20 +150,23 @@ class NotesSyncEngine:
         dry_run: bool = False,
         skip_deletions: bool = False,
         deletion_threshold: int = 5,
+        sync_mode: str = "bidirectional",
     ) -> dict[str, int]:
         """
         Synchronize a single Apple Notes folder with markdown files.
 
-        This is the MAIN SYNC METHOD that implements the bidirectional algorithm.
+        This is the MAIN SYNC METHOD that implements the sync algorithm.
 
         Args:
-            folder_name: Name of the Apple Notes folder to sync
+            folder_name: Name of the Apple Notes folder to sync (can be nested, e.g., "Work/Projects")
             markdown_subfolder: Optional subfolder in markdown destination
                                (if None, uses base folder)
             dry_run: If True, preview changes without applying them
             skip_deletions: If True, skip all deletion operations
             deletion_threshold: Prompt user if deletions exceed this count
                                (-1 to disable threshold, default: 5)
+            sync_mode: Sync direction - 'import' (Markdown → Apple Notes),
+                      'export' (Apple Notes → Markdown), or 'bidirectional' (both ways)
 
         Returns:
             Dictionary with sync statistics:
@@ -180,7 +183,13 @@ class NotesSyncEngine:
         Raises:
             RuntimeError: If sync fails
         """
-        logger.info(f"Starting sync for folder: {folder_name}" + (" (DRY RUN)" if dry_run else ""))
+        # Validate sync_mode
+        valid_modes = {"import", "export", "bidirectional"}
+        if sync_mode not in valid_modes:
+            raise ValueError(f"Invalid sync_mode '{sync_mode}'. Must be one of: {', '.join(valid_modes)}")
+
+        mode_desc = f" ({sync_mode.upper()} mode)"
+        logger.info(f"Starting sync for folder: {folder_name}{mode_desc}" + (" (DRY RUN)" if dry_run else ""))
         stats = {
             "created_local": 0,
             "created_remote": 0,
@@ -277,7 +286,11 @@ class NotesSyncEngine:
 
                     # Check if remote file still exists
                     if str(remote_path) not in remote_notes_by_path:
-                        # Remote file was deleted - delete from Apple Notes
+                        # Remote file was deleted - delete from Apple Notes (only in import/bidirectional mode)
+                        if sync_mode == "export":
+                            logger.debug(f"Remote file deleted, but in export mode - keeping note: {apple_note.name}")
+                            continue
+
                         if skip_deletions:
                             logger.info(f"Remote file deleted, skipping deletion (--skip-deletions): {apple_note.name}")
                             continue
@@ -301,9 +314,9 @@ class NotesSyncEngine:
                     remote_modified = md_note.modified_date
 
                     if local_modified > last_sync and remote_modified > last_sync:
-                        # Both changed since last sync - use last-write-wins
-                        if local_modified > remote_modified:
-                            # Local is newer - push to remote
+                        # Both changed since last sync - use last-write-wins (respecting sync mode)
+                        if sync_mode == "export" or (sync_mode == "bidirectional" and local_modified > remote_modified):
+                            # Export mode or local is newer in bidirectional - push to remote
                             if dry_run:
                                 logger.info(f"[DRY RUN] Would update remote (conflict, local wins): {apple_note.name}")
                             else:
@@ -319,8 +332,8 @@ class NotesSyncEngine:
                                 )
                                 remote_path = updated_path
                             stats["updated_remote"] += 1
-                        else:
-                            # Remote is newer - pull from remote
+                        elif sync_mode == "import" or sync_mode == "bidirectional":
+                            # Import mode or remote is newer in bidirectional - pull from remote
                             if dry_run:
                                 logger.info(f"[DRY RUN] Would update local (conflict, remote wins): {apple_note.name}")
                             else:
@@ -350,51 +363,59 @@ class NotesSyncEngine:
                             )
 
                     elif local_modified > last_sync:
-                        # Only local changed - push to remote
-                        if dry_run:
-                            logger.info(f"[DRY RUN] Would update remote: {apple_note.name}")
+                        # Only local changed - push to remote (only in export/bidirectional mode)
+                        if sync_mode == "import":
+                            logger.debug(f"Local changed but in import mode - skipping: {apple_note.name}")
+                            stats["unchanged"] += 1
                         else:
-                            logger.info(f"Local changed: {apple_note.name}")
-                            updated_path, attachment_slug = await self._push_to_remote(
-                                apple_note,
-                                remote_path,
-                                markdown_subfolder,
-                                md_note,
-                            )
-                            remote_path = updated_path
-                            await self.db.upsert_mapping(
-                                local_uuid=uuid,
-                                local_name=apple_note.name,
-                                local_folder_uuid="",
-                                remote_path=remote_path,
-                                timestamp=datetime.now().timestamp(),
-                                attachment_slug=md_note.metadata.get("attachment_slug", attachment_slug),
-                            )
-                        stats["updated_remote"] += 1
+                            if dry_run:
+                                logger.info(f"[DRY RUN] Would update remote: {apple_note.name}")
+                            else:
+                                logger.info(f"Local changed: {apple_note.name}")
+                                updated_path, attachment_slug = await self._push_to_remote(
+                                    apple_note,
+                                    remote_path,
+                                    markdown_subfolder,
+                                    md_note,
+                                )
+                                remote_path = updated_path
+                                await self.db.upsert_mapping(
+                                    local_uuid=uuid,
+                                    local_name=apple_note.name,
+                                    local_folder_uuid="",
+                                    remote_path=remote_path,
+                                    timestamp=datetime.now().timestamp(),
+                                    attachment_slug=md_note.metadata.get("attachment_slug", attachment_slug),
+                                )
+                            stats["updated_remote"] += 1
 
                     elif remote_modified > last_sync:
-                        # Only remote changed - pull from remote
-                        if dry_run:
-                            logger.info(f"[DRY RUN] Would update local: {apple_note.name}")
+                        # Only remote changed - pull from remote (only in import/bidirectional mode)
+                        if sync_mode == "export":
+                            logger.debug(f"Remote changed but in export mode - skipping: {apple_note.name}")
+                            stats["unchanged"] += 1
                         else:
-                            logger.info(f"Remote changed: {apple_note.name}")
-                            new_uuid = await self._pull_from_remote(
-                                md_note,
-                                folder_name,
-                                apple_note.name,
-                                uuid,
-                            )
-                            if new_uuid:
-                                uuid = new_uuid
-                            await self.db.upsert_mapping(
-                                local_uuid=uuid,
-                                local_name=apple_note.name,
-                                local_folder_uuid="",
-                                remote_path=remote_path,
-                                timestamp=datetime.now().timestamp(),
-                                attachment_slug=attachment_slug,
-                            )
-                        stats["updated_local"] += 1
+                            if dry_run:
+                                logger.info(f"[DRY RUN] Would update local: {apple_note.name}")
+                            else:
+                                logger.info(f"Remote changed: {apple_note.name}")
+                                new_uuid = await self._pull_from_remote(
+                                    md_note,
+                                    folder_name,
+                                    apple_note.name,
+                                    uuid,
+                                )
+                                if new_uuid:
+                                    uuid = new_uuid
+                                await self.db.upsert_mapping(
+                                    local_uuid=uuid,
+                                    local_name=apple_note.name,
+                                    local_folder_uuid="",
+                                    remote_path=remote_path,
+                                    timestamp=datetime.now().timestamp(),
+                                    attachment_slug=attachment_slug,
+                                )
+                            stats["updated_local"] += 1
 
                     else:
                         # Neither changed - no sync needed
@@ -402,7 +423,11 @@ class NotesSyncEngine:
                         stats["unchanged"] += 1
 
                 else:
-                    # Note is not mapped - it's new, create on remote
+                    # Note is not mapped - it's new, create on remote (only in export/bidirectional mode)
+                    if sync_mode == "import":
+                        logger.debug(f"New local note but in import mode - skipping: {apple_note.name}")
+                        continue
+
                     if dry_run:
                         logger.info(f"[DRY RUN] Would create remote: {apple_note.name}")
                         # Create fake path for dry run tracking
@@ -435,8 +460,10 @@ class NotesSyncEngine:
                 mapping = await self.db.get_mapping_by_remote_path(remote_path_str)
 
                 if mapping:
-                    # Had a mapping but local note is gone - delete remote
-                    if skip_deletions:
+                    # Had a mapping but local note is gone - delete remote (only in export/bidirectional mode)
+                    if sync_mode == "import":
+                        logger.debug(f"Local note deleted, but in import mode - keeping markdown: {md_note.name}")
+                    elif skip_deletions:
                         logger.info(f"Local note deleted, skipping deletion (--skip-deletions): {md_note.name}")
                     elif dry_run:
                         logger.info(f"[DRY RUN] Would delete markdown: {md_note.name}")
@@ -447,7 +474,11 @@ class NotesSyncEngine:
                         await self.db.delete_mapping_by_remote_path(remote_path_str)
                         stats["deleted_remote"] += 1
                 else:
-                    # New remote file - create in Apple Notes
+                    # New remote file - create in Apple Notes (only in import/bidirectional mode)
+                    if sync_mode == "export":
+                        logger.debug(f"New remote note but in export mode - skipping: {md_note.name}")
+                        continue
+
                     if dry_run:
                         logger.info(f"[DRY RUN] Would create local: {md_note.name}")
                     else:
@@ -765,6 +796,128 @@ class NotesSyncEngine:
         )
         return note_uuid
 
+    async def sync_with_mappings(
+        self,
+        folder_mappings: dict[str, dict[str, str]],
+        dry_run: bool = False,
+        skip_deletions: bool = False,
+        deletion_threshold: int = 5,
+    ) -> dict[str, dict[str, int]]:
+        """
+        Synchronize notes using explicit folder mappings.
+
+        When folder mappings are configured, automatic 1:1 sync is disabled.
+        Only folders in the mappings are synced. Parent folder mappings apply
+        to all subfolders recursively.
+
+        Args:
+            folder_mappings: Dictionary mapping Apple Notes folder → {markdown_folder, mode}
+                           e.g., {"Work": {"markdown_folder": "Work", "mode": "bidirectional"}}
+            dry_run: If True, preview changes without applying them
+            skip_deletions: If True, skip all deletion operations
+            deletion_threshold: Prompt user if deletions exceed this count
+
+        Returns:
+            Dictionary mapping folder names to their sync statistics
+
+        Example:
+            mappings = {
+                "Work Stuff": {"markdown_folder": "Work", "mode": "bidirectional"},
+                "Recipes": {"markdown_folder": "Recipies", "mode": "export"},
+                "Private": None,  # Excluded from sync
+            }
+            results = await engine.sync_with_mappings(mappings)
+        """
+        logger.info(f"Starting selective sync with {len(folder_mappings)} folder mapping(s)")
+        results: dict[str, dict[str, int]] = {}
+
+        # Step 1: Clean up database entries for unmapped folders (migration logic)
+        # When switching from auto-sync to mapping mode, remove entries that aren't mapped
+        if folder_mappings:
+            all_mappings = await self.db.get_all_mappings()
+            mapped_note_uuids = set()
+
+            # First, collect all note UUIDs that should be kept (from mapped folders)
+            for apple_folder, mapping_config in folder_mappings.items():
+                if not mapping_config:  # Skip excluded folders
+                    continue
+
+                markdown_folder = mapping_config.get("markdown_folder")
+                if not markdown_folder:
+                    continue
+
+                # Get notes from this Apple folder to find their UUIDs
+                try:
+                    apple_notes = await self.notes_adapter.get_notes(apple_folder)
+                    for note in apple_notes:
+                        mapped_note_uuids.add(note.uuid)
+                except Exception as e:
+                    logger.warning(f"Failed to get notes from '{apple_folder}' for cleanup: {e}")
+
+            # Delete database entries for notes not in mapped folders
+            deleted_count = 0
+            for db_mapping in all_mappings:
+                if db_mapping["local_uuid"] not in mapped_note_uuids:
+                    await self.db.delete_mapping(db_mapping["local_uuid"])
+                    deleted_count += 1
+
+            if deleted_count > 0:
+                logger.info(f"Cleaned up {deleted_count} database entries for unmapped folders")
+
+        # Step 2: Sync each mapped folder
+        for apple_folder, mapping_config in folder_mappings.items():
+            if not mapping_config:
+                logger.info(f"Skipping excluded folder: {apple_folder}")
+                continue
+
+            markdown_folder = mapping_config.get("markdown_folder")
+            mode = mapping_config.get("mode", "bidirectional")
+
+            if not markdown_folder:
+                logger.warning(f"No markdown_folder specified for '{apple_folder}', skipping")
+                continue
+
+            try:
+                logger.info(f"Syncing '{apple_folder}' → '{markdown_folder}' ({mode} mode)")
+                stats = await self.sync_folder(
+                    folder_name=apple_folder,
+                    markdown_subfolder=markdown_folder,
+                    dry_run=dry_run,
+                    skip_deletions=skip_deletions,
+                    deletion_threshold=deletion_threshold,
+                    sync_mode=mode,
+                )
+                results[apple_folder] = stats
+
+                # Parent folder mapping applies to all subfolders
+                # Find all Apple Notes subfolders under this parent
+                all_apple_folders = await self.notes_adapter.list_folders()
+                for folder in all_apple_folders:
+                    folder_path = folder.name
+                    # Check if this is a subfolder of the current mapped folder
+                    if folder_path.startswith(f"{apple_folder}/"):
+                        # Calculate the corresponding markdown subfolder
+                        relative_path = folder_path[len(apple_folder) + 1:]  # +1 for the "/"
+                        markdown_subfolder = f"{markdown_folder}/{relative_path}"
+
+                        logger.info(f"Syncing nested folder '{folder_path}' → '{markdown_subfolder}' ({mode} mode)")
+                        subfolder_stats = await self.sync_folder(
+                            folder_name=folder_path,
+                            markdown_subfolder=markdown_subfolder,
+                            dry_run=dry_run,
+                            skip_deletions=skip_deletions,
+                            deletion_threshold=deletion_threshold,
+                            sync_mode=mode,
+                        )
+                        results[folder_path] = subfolder_stats
+
+            except Exception as e:
+                logger.error(f"Failed to sync folder '{apple_folder}': {e}")
+                results[apple_folder] = {"error": str(e)}
+
+        logger.info(f"Selective sync complete. Processed {len(results)} folder(s)")
+        return results
+
     async def list_folders(self) -> list[dict]:
         """
         List all folders from Apple Notes.
@@ -777,6 +930,41 @@ class NotesSyncEngine:
         """
         folders = await self.notes_adapter.list_folders()
         return [{"uuid": f.uuid, "name": f.name, "note_count": f.note_count} for f in folders]
+
+    async def get_all_folders(self) -> dict[str, dict[str, bool]]:
+        """
+        Get all folders from both Apple Notes and Markdown sources.
+
+        Returns hierarchical folder information with existence indicators.
+        Useful for UI that needs to show which folders exist where.
+
+        Returns:
+            Dictionary mapping folder paths to source indicators:
+            {
+                "Work": {"apple": True, "markdown": True},
+                "Work/Projects": {"apple": True, "markdown": False},
+                "Personal": {"apple": True, "markdown": True},
+                "Configs": {"apple": False, "markdown": True}
+            }
+        """
+        folders_info: dict[str, dict[str, bool]] = {}
+
+        # Get Apple Notes folders
+        apple_folders = await self.notes_adapter.list_folders()
+        for folder in apple_folders:
+            folder_path = folder.name  # Already includes nested path from updated AppleScript
+            if folder_path not in folders_info:
+                folders_info[folder_path] = {"apple": False, "markdown": False}
+            folders_info[folder_path]["apple"] = True
+
+        # Get Markdown folders
+        markdown_folders = await self.markdown_adapter.list_folders()
+        for folder_path in markdown_folders:
+            if folder_path not in folders_info:
+                folders_info[folder_path] = {"apple": False, "markdown": False}
+            folders_info[folder_path]["markdown"] = True
+
+        return folders_info
 
     async def get_sync_status(self, folder_name: str | None = None) -> dict:
         """
