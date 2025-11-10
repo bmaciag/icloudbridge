@@ -3,14 +3,16 @@
 import json
 import logging
 import tempfile
-import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile, status
+from fastapi.responses import FileResponse
 
 from icloudbridge.api.dependencies import ConfigDep, PasswordsDBDep, PasswordsSyncEngineDep
-from icloudbridge.api.models import PasswordsSyncRequest
+from icloudbridge.api.downloads import download_manager
+from icloudbridge.api.models import VaultwardenCredentialRequest
 from icloudbridge.sources.passwords.vaultwarden_api import VaultwardenAPIClient
 from icloudbridge.utils.credentials import CredentialStore
 from icloudbridge.utils.db import SyncLogsDB
@@ -18,6 +20,180 @@ from icloudbridge.utils.db import SyncLogsDB
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _cleanup_file(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except Exception:  # pragma: no cover - best effort cleanup
+        pass
+
+
+async def _save_uploaded_csv(upload: UploadFile) -> Path:
+    suffix = Path(upload.filename or "").suffix or ".csv"
+    temp_path = Path(tempfile.gettempdir()) / f"icloudbridge-passwords-{uuid.uuid4().hex}{suffix}"
+    data = await upload.read()
+    temp_path.write_bytes(data)
+    return temp_path
+
+
+async def _create_vaultwarden_client(config: ConfigDep) -> VaultwardenAPIClient:
+    credential_store = CredentialStore()
+    credentials = credential_store.get_vaultwarden_credentials(config.passwords.vaultwarden_email)
+
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VaultWarden credentials not found. Please configure them first.",
+        )
+
+    url = config.passwords.vaultwarden_url
+    if not url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VaultWarden URL not configured. Please set it in Settings.",
+        )
+
+    if not url.startswith("http://") and not url.startswith("https://"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="VaultWarden URL must include http:// or https://",
+        )
+
+    client = VaultwardenAPIClient(
+        url,
+        credentials['email'],
+        credentials['password'],
+        credentials.get('client_id'),
+        credentials.get('client_secret'),
+    )
+    await client.authenticate()
+    return client
+
+
+async def _attach_download_metadata(result: dict) -> tuple[dict, bool]:
+    pull_stats = result.get("pull")
+    if not pull_stats:
+        return result, False
+
+    download_path = pull_stats.pop("download_path", None)
+    if not download_path:
+        return result, False
+
+    csv_path = Path(download_path)
+    if not csv_path.exists():
+        return result, False
+
+    token, expires_at = await download_manager.register(csv_path, filename=csv_path.name)
+    expires_iso = datetime.fromtimestamp(expires_at).isoformat()
+    download_info = {
+        "token": token,
+        "filename": csv_path.name,
+        "expires_at": expires_iso,
+    }
+    result["download"] = download_info
+    pull_stats["download_token"] = token
+    pull_stats["download_filename"] = csv_path.name
+    pull_stats["download_expires_at"] = expires_iso
+
+    return result, True
+
+
+async def _run_passwords_sync(
+    *,
+    engine: PasswordsSyncEngineDep,
+    config: ConfigDep,
+    uploaded_file: UploadFile | None,
+    simulate: bool,
+    run_push: bool,
+    run_pull: bool,
+    log_sync_type: str | None,
+):
+    apple_csv_path: Path | None = None
+    output_csv_path: Path | None = None
+    keep_output_file = False
+    client: VaultwardenAPIClient | None = None
+    log_id = None
+    sync_logs_db: SyncLogsDB | None = None
+
+    try:
+        if run_push:
+            if not uploaded_file:
+                raise HTTPException(status_code=400, detail="Apple Passwords CSV is required")
+            apple_csv_path = await _save_uploaded_csv(uploaded_file)
+
+        if run_pull and not simulate:
+            output_csv_path = Path(tempfile.gettempdir()) / f"apple-import-{uuid.uuid4().hex}.csv"
+
+        client = await _create_vaultwarden_client(config)
+
+        if log_sync_type and not simulate:
+            sync_logs_db = SyncLogsDB(config.general.data_dir / "sync_logs.db")
+            await sync_logs_db.initialize()
+            log_id = await sync_logs_db.create_log(
+                service="passwords",
+                sync_type=log_sync_type,
+                status="running",
+            )
+
+        result = await engine.sync(
+            apple_csv_path=apple_csv_path,
+            vaultwarden_client=client,
+            output_apple_csv=output_csv_path,
+            simulate=simulate,
+            run_push=run_push,
+            run_pull=run_pull,
+        )
+
+        result, keep_output_file = await _attach_download_metadata(result)
+
+        if log_id and sync_logs_db:
+            await sync_logs_db.update_log(
+                log_id=log_id,
+                status="completed",
+                duration_seconds=round(result.get("total_time", 0), 0),
+                stats_json=json.dumps(result),
+            )
+
+        response = {
+            "status": "success",
+            "simulate": simulate,
+            "mode": {"push": run_push, "pull": run_pull},
+            "stats": result,
+        }
+        if result.get("download"):
+            response["download"] = result["download"]
+        return response
+
+    except HTTPException as http_exc:
+        if log_id and sync_logs_db:
+            await sync_logs_db.update_log(
+                log_id=log_id,
+                status="failed",
+                duration_seconds=0,
+                error_message=http_exc.detail if isinstance(http_exc.detail, str) else str(http_exc.detail),
+            )
+        raise
+    except Exception as exc:
+        if log_id and sync_logs_db:
+            await sync_logs_db.update_log(
+                log_id=log_id,
+                status="failed",
+                duration_seconds=0,
+                error_message=str(exc),
+            )
+        logger.error("Passwords sync failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Sync failed: {exc}",
+        )
+    finally:
+        if apple_csv_path:
+            apple_csv_path.unlink(missing_ok=True)
+        if output_csv_path and not keep_output_file:
+            output_csv_path.unlink(missing_ok=True)
+        if client:
+            await client.close()
 
 
 @router.post("/import/apple")
@@ -175,105 +351,72 @@ async def sync_passwords(
     file: UploadFile = File(...),
     engine: PasswordsSyncEngineDep = None,
     config: ConfigDep = None,
+    simulate: bool = False,
 ):
-    """Full auto-sync: Apple ↔ VaultWarden (push & pull).
+    """Full auto-sync: Apple ↔ VaultWarden (push & pull)."""
 
-    Args:
-        file: Apple Passwords CSV export
+    result = await _run_passwords_sync(
+        engine=engine,
+        config=config,
+        uploaded_file=file,
+        simulate=simulate,
+        run_push=True,
+        run_pull=True,
+        log_sync_type="manual",
+    )
+    return result
 
-    Returns:
-        Sync results with push and pull statistics
-    """
-    # Create sync log entry
-    sync_logs_db = SyncLogsDB(config.general.data_dir / "sync_logs.db")
-    await sync_logs_db.initialize()
 
-    log_id = await sync_logs_db.create_log(
-        service="passwords",
-        sync_type="manual",
-        status="running",
+@router.post("/sync/export")
+async def export_passwords(
+    file: UploadFile = File(...),
+    engine: PasswordsSyncEngineDep = None,
+    config: ConfigDep = None,
+    simulate: bool = False,
+):
+    """Push Apple Passwords CSV changes to VaultWarden only."""
+
+    return await _run_passwords_sync(
+        engine=engine,
+        config=config,
+        uploaded_file=file,
+        simulate=simulate,
+        run_push=True,
+        run_pull=False,
+        log_sync_type=None,
     )
 
-    start_time = time.time()
+
+@router.post("/sync/import")
+async def import_passwords(
+    engine: PasswordsSyncEngineDep = None,
+    config: ConfigDep = None,
+    simulate: bool = False,
+):
+    """Pull new VaultWarden entries and prepare Apple CSV."""
+
+    return await _run_passwords_sync(
+        engine=engine,
+        config=config,
+        uploaded_file=None,
+        simulate=simulate,
+        run_push=False,
+        run_pull=True,
+        log_sync_type=None,
+    )
+
+
+@router.get("/download/{token}")
+async def download_passwords_csv(token: str, background_tasks: BackgroundTasks):
+    """Download a previously generated CSV using a temporary token."""
 
     try:
-        # Save uploaded file to temporary location
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.csv') as tmp:
-            content = await file.read()
-            tmp.write(content)
-            apple_csv_path = tmp.name
+        file_path, filename = await download_manager.consume(token)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Download link expired or invalid")
 
-        # Get VaultWarden credentials
-        credential_store = CredentialStore()
-        credentials = credential_store.get_vaultwarden_credentials(config.passwords.vaultwarden_email)
-
-        if not credentials:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="VaultWarden credentials not found. Please configure them first."
-            )
-
-        # Create VaultWarden client
-        vw_client = VaultwardenAPIClient(
-            config.passwords.vaultwarden_url,
-            credentials['email'],
-            credentials['password'],
-            credentials.get('client_id'),
-            credentials.get('client_secret'),
-        )
-
-        # Output path for pull
-        output_apple_csv = Path(tempfile.gettempdir()) / "apple_import.csv"
-
-        # Perform sync
-        result = await engine.sync(
-            apple_csv_path=apple_csv_path,
-            vaultwarden_client=vw_client,
-            output_apple_csv=str(output_apple_csv),
-        )
-
-        # Clean up uploaded file
-        Path(apple_csv_path).unlink()
-
-        duration = time.time() - start_time
-
-        # Update sync log with success
-        await sync_logs_db.update_log(
-            log_id=log_id,
-            status="completed",
-            duration_seconds=round(duration, 0),
-            stats_json=json.dumps(result),
-        )
-
-        return {
-            "status": "success",
-            "duration_seconds": duration,
-            "stats": result,
-            "apple_import_csv": str(output_apple_csv) if output_apple_csv.exists() else None,
-        }
-
-    except Exception as e:
-        duration = time.time() - start_time
-        error_msg = str(e)
-
-        logger.error(f"Passwords sync failed: {error_msg}")
-
-        # Clean up on error
-        if 'apple_csv_path' in locals():
-            Path(apple_csv_path).unlink(missing_ok=True)
-
-        # Update sync log with error
-        await sync_logs_db.update_log(
-            log_id=log_id,
-            status="failed",
-            duration_seconds=round(duration, 0),
-            error_message=error_msg,
-        )
-
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Sync failed: {error_msg}"
-        )
+    background_tasks.add_task(_cleanup_file, file_path)
+    return FileResponse(file_path, media_type="text/csv", filename=filename)
 
 
 @router.get("/status")
@@ -306,13 +449,15 @@ async def get_status(passwords_db: PasswordsDBDep, config: ConfigDep):
         if log["status"] == "failed":
             message = log.get("error_message", "Sync failed")
         elif sync_stats:
-            push_stats = sync_stats.get("push", {})
-            pull_stats = sync_stats.get("pull", {})
+            push_stats = sync_stats.get("push") or {}
+            pull_stats = sync_stats.get("pull") or {}
             msg_parts = []
-            if push_stats.get("pushed", 0) > 0:
-                msg_parts.append(f"pushed {push_stats['pushed']} to VaultWarden")
-            if pull_stats.get("pulled", 0) > 0:
-                msg_parts.append(f"pulled {pull_stats['pulled']} from VaultWarden")
+            created = push_stats.get("created")
+            if created:
+                msg_parts.append(f"pushed {created} to VaultWarden")
+            new_entries = pull_stats.get("new_entries")
+            if new_entries:
+                msg_parts.append(f"pulled {new_entries} for Apple import")
 
             if msg_parts:
                 message = f"Synced: {', '.join(msg_parts)}"
@@ -393,13 +538,15 @@ async def get_history(
         if log["status"] == "failed":
             message = log.get("error_message", "Sync failed")
         elif stats:
-            push_stats = stats.get("push", {})
-            pull_stats = stats.get("pull", {})
+            push_stats = stats.get("push") or {}
+            pull_stats = stats.get("pull") or {}
             msg_parts = []
-            if push_stats.get("pushed", 0) > 0:
-                msg_parts.append(f"pushed {push_stats['pushed']} to VaultWarden")
-            if pull_stats.get("pulled", 0) > 0:
-                msg_parts.append(f"pulled {pull_stats['pulled']} from VaultWarden")
+            created = push_stats.get("created")
+            if created:
+                msg_parts.append(f"pushed {created} to VaultWarden")
+            new_entries = pull_stats.get("new_entries")
+            if new_entries:
+                msg_parts.append(f"pulled {new_entries} for Apple import")
 
             if msg_parts:
                 message = f"Synced: {', '.join(msg_parts)}"
@@ -476,10 +623,8 @@ async def reset_database(passwords_db: PasswordsDBDep, config: ConfigDep):
 
 @router.post("/vaultwarden/credentials")
 async def set_vaultwarden_credentials(
-    email: str,
-    password: str,
-    client_id: str | None = None,
-    client_secret: str | None = None,
+    payload: VaultwardenCredentialRequest,
+    config: ConfigDep,
 ):
     """Store VaultWarden credentials in system keyring.
 
@@ -495,17 +640,38 @@ async def set_vaultwarden_credentials(
     try:
         credential_store = CredentialStore()
         credential_store.set_vaultwarden_credentials(
-            email=email,
-            password=password,
-            client_id=client_id,
-            client_secret=client_secret,
+            email=payload.email,
+            password=payload.password,
+            client_id=payload.client_id,
+            client_secret=payload.client_secret,
         )
 
-        logger.info(f"VaultWarden credentials stored for: {email}")
+        logger.info(f"VaultWarden credentials stored for: {payload.email}")
+
+        updated = False
+        if not config.passwords.enabled:
+            config.passwords.enabled = True
+            updated = True
+        if config.passwords.vaultwarden_email != payload.email:
+            config.passwords.vaultwarden_email = payload.email
+            updated = True
+        if payload.url:
+            config.passwords.vaultwarden_url = payload.url
+            updated = True
+
+        if updated:
+            try:
+                config.save_to_file(config.default_config_path)
+                from icloudbridge.api.dependencies import get_config
+
+                get_config.cache_clear()
+                logger.info("Passwords configuration updated with VaultWarden email")
+            except Exception as exc:
+                logger.warning("Failed to persist VaultWarden email in config: %s", exc)
 
         return {
             "status": "success",
-            "message": f"Credentials stored securely for {email}",
+            "message": f"Credentials stored securely for {payload.email}",
         }
     except Exception as e:
         logger.error(f"Failed to store VaultWarden credentials: {e}")
@@ -516,7 +682,7 @@ async def set_vaultwarden_credentials(
 
 
 @router.delete("/vaultwarden/credentials")
-async def delete_vaultwarden_credentials(email: str):
+async def delete_vaultwarden_credentials(email: str, config: ConfigDep):
     """Delete VaultWarden credentials from system keyring.
 
     Args:
@@ -530,6 +696,16 @@ async def delete_vaultwarden_credentials(email: str):
         credential_store.delete_vaultwarden_credentials(email)
 
         logger.info(f"VaultWarden credentials deleted for: {email}")
+
+        if config.passwords.vaultwarden_email == email:
+            config.passwords.vaultwarden_email = None
+            try:
+                config.save_to_file(config.default_config_path)
+                from icloudbridge.api.dependencies import get_config
+
+                get_config.cache_clear()
+            except Exception as exc:
+                logger.warning("Failed to persist VaultWarden email removal: %s", exc)
 
         return {
             "status": "success",

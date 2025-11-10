@@ -2,11 +2,15 @@
 
 import csv
 import logging
+import re
 from pathlib import Path
 
 from .models import PasswordEntry
 
 logger = logging.getLogger(__name__)
+
+
+_ICB_FOLDER_TAG = re.compile(r"#icb_([A-Za-z0-9_-]+)")
 
 
 class ApplePasswordsCSVParser:
@@ -36,9 +40,9 @@ class ApplePasswordsCSVParser:
             raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
         entries = []
+        account_index: dict[tuple[str, str, str], PasswordEntry] = {}
         duplicates = 0
         errors = 0
-        seen_keys = set()
 
         with open(csv_path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
@@ -66,30 +70,43 @@ class ApplePasswordsCSVParser:
 
                     # Optional fields
                     url = row.get("URL", "").strip() or None
-                    notes = row.get("Notes", "").strip() or None
+                    notes_raw = row.get("Notes", "").strip()
+                    notes = notes_raw or None
                     otp_auth = row.get("OTPAuth", "").strip() or None
 
-                    entry = PasswordEntry(
-                        title=title,
-                        username=username,
-                        password=password,
-                        url=url,
-                        notes=notes,
-                        otp_auth=otp_auth,
-                        folder=None,  # Apple CSV doesn't include folder
-                    )
+                    folder = None
+                    if notes_raw:
+                        tag_match = _ICB_FOLDER_TAG.search(notes_raw)
+                        if tag_match:
+                            folder = tag_match.group(1)
 
-                    # Deduplication
-                    dedup_key = entry.get_dedup_key()
-                    if dedup_key in seen_keys:
-                        logger.debug(
-                            f"Row {row_num}: Duplicate entry skipped: {title} / {username}"
-                        )
+                    account_key = (title.lower(), username.lower(), password)
+                    entry = account_index.get(account_key)
+                    if entry:
                         duplicates += 1
-                        continue
+                        if notes and not entry.notes:
+                            entry.notes = notes
+                        if otp_auth and not entry.otp_auth:
+                            entry.otp_auth = otp_auth
+                        if folder and not entry.folder:
+                            entry.folder = folder
+                        if url:
+                            entry.add_url(url)
+                    else:
+                        entry = PasswordEntry(
+                            title=title,
+                            username=username,
+                            password=password,
+                            url=None,
+                            notes=notes,
+                            otp_auth=otp_auth,
+                            folder=folder,
+                        )
+                        if url:
+                            entry.add_url(url)
+                        account_index[account_key] = entry
+                        entries.append(entry)
 
-                    seen_keys.add(dedup_key)
-                    entries.append(entry)
 
                 except Exception as e:
                     logger.error(f"Row {row_num}: Error parsing entry: {e}")
@@ -123,16 +140,18 @@ class ApplePasswordsCSVParser:
             writer.writeheader()
 
             for entry in entries:
-                writer.writerow(
-                    {
-                        "Title": entry.title,
-                        "URL": entry.url or "",
-                        "Username": entry.username,
-                        "Password": entry.password,
-                        "Notes": entry.notes or "",
-                        "OTPAuth": entry.otp_auth or "",
-                    }
-                )
+                urls = entry.get_all_urls() or [None]
+                for url in urls:
+                    writer.writerow(
+                        {
+                            "Title": entry.title,
+                            "URL": url or "",
+                            "Username": entry.username,
+                            "Password": entry.password,
+                            "Notes": entry.notes or "",
+                            "OTPAuth": entry.otp_auth or "",
+                        }
+                    )
 
         # Set secure permissions (owner read/write only)
         os.chmod(output_path, 0o600)

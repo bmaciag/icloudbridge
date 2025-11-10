@@ -1,32 +1,151 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Key, RefreshCw, Upload, Download, Trash2, Lock } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useEffect, useRef, useState } from 'react';
+import { Key, RefreshCw, Upload, PlayCircle, Activity, FileDown, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import apiClient from '@/lib/api-client';
 import { useSyncStore } from '@/store/sync-store';
-import type { AppConfig, SyncLog } from '@/types/api';
+import type { AppConfig, PasswordsDownloadInfo, PasswordsSyncResponse, SyncLog } from '@/types/api';
+
+function DownloadLink({ info }: { info: PasswordsDownloadInfo }) {
+  const [hasExpired, setHasExpired] = useState(false);
+  const [countdown, setCountdown] = useState('');
+
+  useEffect(() => {
+    const expiresAt = new Date(info.expires_at).getTime();
+
+    const updateCountdown = () => {
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) {
+        setHasExpired(true);
+        setCountdown('expired');
+        return;
+      }
+      const minutes = Math.floor(remaining / 60000);
+      const seconds = Math.floor((remaining % 60000) / 1000);
+      setCountdown(`${minutes}m ${seconds}s`);
+    };
+
+    updateCountdown();
+    const timer = setInterval(updateCountdown, 1000);
+    return () => clearInterval(timer);
+  }, [info]);
+
+  return (
+    <div className="space-y-1">
+      <Button
+        asChild
+        variant="outline"
+        disabled={hasExpired}
+        className="w-full md:w-auto"
+      >
+        <a
+          href={`/api/passwords/download/${info.token}`}
+          download={info.filename}
+          className="flex items-center gap-2"
+        >
+          <FileDown className="w-4 h-4" />
+          {hasExpired ? 'Link expired' : 'Download Apple CSV'}
+        </a>
+      </Button>
+      <p className="text-xs text-muted-foreground">
+        {hasExpired ? 'Please generate a new import file.' : `Link expires in ${countdown}`}
+      </p>
+    </div>
+  );
+}
+
+function SyncStatsView({ result }: { result: PasswordsSyncResponse | null }) {
+  if (!result) {
+    return null;
+  }
+
+  const { stats } = result;
+  return (
+    <div className="space-y-4 rounded-md border bg-card/40 p-4">
+      <div className="flex items-center justify-between text-sm text-muted-foreground">
+        <span>{result.simulate ? 'Simulation results' : 'Sync results'}</span>
+        <span>{stats.total_time ? `${stats.total_time.toFixed(1)}s` : ''}</span>
+      </div>
+
+      {stats.push && (
+        <div className="space-y-2">
+          <div className="text-sm font-semibold">VaultWarden updates</div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <div>
+              <p className="text-muted-foreground">Queued</p>
+              <p className="font-medium">{stats.push.queued ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Created</p>
+              <p className="font-medium">{stats.push.created ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Skipped</p>
+              <p className="font-medium">{stats.push.skipped ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Failed</p>
+              <p className="font-medium">{stats.push.failed ?? 0}</p>
+            </div>
+          </div>
+          {stats.push.errors?.length ? (
+            <ul className="text-xs text-destructive list-disc list-inside">
+              {stats.push.errors.map((err, idx) => (
+                <li key={`${err}-${idx}`}>{err}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      )}
+
+      {stats.pull && (
+        <div className="space-y-3 border-t pt-3">
+          <div className="text-sm font-semibold">Apple Passwords import</div>
+          <div className="flex flex-col gap-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">New entries</span>
+              <span className="font-medium">{stats.pull.new_entries ?? 0}</span>
+            </div>
+            {result.download && stats.pull.new_entries > 0 && (
+              <DownloadLink info={result.download} />
+            )}
+            {stats.pull.new_entries === 0 && (
+              <p className="text-xs text-muted-foreground">No new entries found.</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Passwords() {
   const [history, setHistory] = useState<SyncLog[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [config, setConfig] = useState<AppConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [vaultwardenUrl, setVaultwardenUrl] = useState('');
-  const [vaultwardenToken, setVaultwardenToken] = useState('');
-  const [showCredentialsForm, setShowCredentialsForm] = useState(false);
-  const [config, setConfig] = useState<AppConfig | null>(null);
+
+  const [bidirectionalFile, setBidirectionalFile] = useState<File | null>(null);
+  const [exportFile, setExportFile] = useState<File | null>(null);
+  const [bidirectionalResult, setBidirectionalResult] = useState<PasswordsSyncResponse | null>(null);
+  const [exportResult, setExportResult] = useState<PasswordsSyncResponse | null>(null);
+  const [importResult, setImportResult] = useState<PasswordsSyncResponse | null>(null);
+
+  const [bidirectionalLoading, setBidirectionalLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+
   const { activeSyncs } = useSyncStore();
   const activeSync = activeSyncs.get('passwords');
 
+  const bidirectionalInputRef = useRef<HTMLInputElement | null>(null);
+  const exportInputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
-    loadData();
+    loadHistory();
     loadConfig();
   }, []);
 
@@ -34,211 +153,108 @@ export default function Passwords() {
     try {
       const cfg = await apiClient.getConfig();
       setConfig(cfg);
-      if (cfg.passwords_vaultwarden_url) {
-        setVaultwardenUrl(cfg.passwords_vaultwarden_url);
-      }
     } catch (err) {
       console.error('Failed to load config:', err);
     }
   };
 
-  const loadData = async () => {
+  const loadHistory = async () => {
     try {
-      setLoading(true);
+      setHistoryLoading(true);
       const historyData = await apiClient.getPasswordsHistory(10);
       setHistory(historyData.logs);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load data');
+      console.error(err);
     } finally {
-      setLoading(false);
+      setHistoryLoading(false);
     }
   };
 
-  const handleImportApple = async (file: File) => {
-    try {
-      setLoading(true);
-      setError(null);
-      setSuccess(null);
-
-      const result = await apiClient.importApplePasswords(file);
-      setSuccess(`Import completed: ${result.message}`);
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleImportBitwarden = async (file: File) => {
-    try {
-      setLoading(true);
-      setError(null);
-      setSuccess(null);
-
-      const result = await apiClient.importBitwardenPasswords(file);
-      setSuccess(`Import completed: ${result.message}`);
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleExportApple = async () => {
-    try {
-      setLoading(true);
-      const blob = await apiClient.exportApplePasswords();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `passwords_apple_${Date.now()}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      setSuccess('Export completed successfully');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Export failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleExportBitwarden = async () => {
-    try {
-      setLoading(true);
-      const blob = await apiClient.exportBitwardenPasswords();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `passwords_bitwarden_${Date.now()}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      setSuccess('Export completed successfully');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Export failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSync = async () => {
-    try {
-      setSyncing(true);
-      setError(null);
-      setSuccess(null);
-
-      const result = await apiClient.syncPasswords({
-        vaultwarden_url: vaultwardenUrl || undefined,
-      });
-
-      setSuccess(`Sync completed: ${result.message}`);
-      await loadData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sync failed');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const handleSetCredentials = async () => {
-    try {
-      setLoading(true);
-      await apiClient.setVaultwardenCredentials(vaultwardenUrl, vaultwardenToken);
-      setSuccess('VaultWarden credentials saved successfully');
-      setVaultwardenUrl('');
-      setVaultwardenToken('');
-      setShowCredentialsForm(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save credentials');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleDeleteCredentials = async () => {
-    if (!confirm('Are you sure you want to delete the stored VaultWarden credentials?')) {
+  const handleBidirectionalAction = async (simulate: boolean) => {
+    if (!bidirectionalFile) {
+      setError('Upload an Apple Passwords CSV first.');
       return;
     }
 
     try {
-      setLoading(true);
-      await apiClient.deleteVaultwardenCredentials();
-      setSuccess('VaultWarden credentials deleted successfully');
+      setBidirectionalLoading(true);
+      setError(null);
+      setSuccess(null);
+      const response = await apiClient.passwordsBidirectionalSync(bidirectionalFile, { simulate });
+      setBidirectionalResult(response);
+      if (simulate) {
+        setSuccess('Simulation complete. No changes were applied.');
+      } else {
+        setSuccess('Bidirectional sync complete.');
+        await loadHistory();
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete credentials');
+      setError(err instanceof Error ? err.message : 'Bidirectional sync failed');
     } finally {
-      setLoading(false);
+      setBidirectionalLoading(false);
+    }
+  };
+
+  const handleExportAction = async () => {
+    if (!exportFile) {
+      setError('Upload an Apple Passwords CSV to export.');
+      return;
+    }
+    try {
+      setExportLoading(true);
+      setError(null);
+      setSuccess(null);
+      const response = await apiClient.passwordsExportToVaultwarden(exportFile);
+      setExportResult(response);
+      setSuccess('Export to VaultWarden complete.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
+  const handleImportAction = async () => {
+    try {
+      setImportLoading(true);
+      setError(null);
+      setSuccess(null);
+      const response = await apiClient.passwordsImportFromVaultwarden();
+      setImportResult(response);
+      if (response.stats.pull?.new_entries) {
+        setSuccess('Import prepared. Download the Apple CSV and import it.');
+      } else {
+        setSuccess('No new VaultWarden entries found.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Import failed');
+    } finally {
+      setImportLoading(false);
     }
   };
 
   const handleReset = async () => {
-    if (!confirm('Are you sure you want to reset Passwords sync? This will clear all sync state.')) {
+    if (!confirm('Reset password sync state? This clears cached metadata.')) {
       return;
     }
-
     try {
-      setLoading(true);
+      setHistoryLoading(true);
       await apiClient.resetPasswords();
-      setSuccess('Passwords sync reset successfully');
-      await loadData();
+      setSuccess('Passwords sync state reset.');
+      await loadHistory();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Reset failed');
     } finally {
-      setLoading(false);
+      setHistoryLoading(false);
     }
   };
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString();
-  };
+  const formatDate = (dateStr: string) => new Date(dateStr).toLocaleString();
 
-  const handleFileSelect = (type: 'apple' | 'bitwarden') => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.csv';
-    input.onchange = async (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        if (type === 'apple') {
-          await handleImportApple(file);
-        } else {
-          await handleImportBitwarden(file);
-        }
-      }
-    };
-    input.click();
-  };
-
-  if (!loading && config && config.passwords_enabled === false) {
-    return (
-      <div className="max-w-4xl mx-auto space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Passwords sync is disabled</CardTitle>
-            <CardDescription>Enable Passwords sync in Settings to unlock VaultWarden tools.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Use the Settings screen to turn Passwords sync back on. Once enabled, you can manage imports, exports,
-              and VaultWarden credentials here.
-            </p>
-            <Button asChild>
-              <Link to="/settings">Go to Settings</Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  const disabled = config && config.passwords_enabled === false;
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
@@ -246,16 +262,44 @@ export default function Passwords() {
             Passwords Sync
           </h1>
           <p className="text-muted-foreground">
-            Sync passwords with VaultWarden and manage exports
+            Sync passwords with Bitwarden / VaultWarden and manage exports
           </p>
         </div>
-        <Button onClick={loadData} variant="outline" disabled={loading}>
-          <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+        <Button onClick={loadHistory} variant="outline" disabled={historyLoading}>
+          <RefreshCw className={`w-4 h-4 mr-2 ${historyLoading ? 'animate-spin' : ''}`} />
           Refresh
         </Button>
       </div>
 
-      {/* Alerts */}
+      <input
+        type="file"
+        ref={bidirectionalInputRef}
+        accept=".csv"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0] ?? null;
+          setBidirectionalFile(file);
+          setBidirectionalResult(null);
+          if (bidirectionalInputRef.current) {
+            bidirectionalInputRef.current.value = '';
+          }
+        }}
+      />
+      <input
+        type="file"
+        ref={exportInputRef}
+        accept=".csv"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0] ?? null;
+          setExportFile(file);
+          setExportResult(null);
+          if (exportInputRef.current) {
+            exportInputRef.current.value = '';
+          }
+        }}
+      />
+
       {error && (
         <Alert variant="destructive">
           <AlertTitle>Error</AlertTitle>
@@ -269,238 +313,209 @@ export default function Passwords() {
         </Alert>
       )}
 
-      {/* Active Sync Progress */}
-      {activeSync && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Sync in Progress</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <div className="flex justify-between text-sm mb-2">
-                <span>{activeSync.message}</span>
-                <span>{activeSync.progress}%</span>
+      {disabled ? (
+        <Alert>
+          <AlertTitle>Passwords sync is disabled</AlertTitle>
+          <AlertDescription>Enable it from the Settings page to use these tools.</AlertDescription>
+        </Alert>
+      ) : (
+        <>
+          {activeSync && (
+            <div className="rounded-lg border bg-card/60 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Activity className="w-4 h-4" /> Sync in progress
               </div>
-              <Progress value={activeSync.progress} />
+              <div>
+                <div className="flex justify-between text-sm mb-2">
+                  <span>{activeSync.message}</span>
+                  <span>{activeSync.progress}%</span>
+                </div>
+                <Progress value={activeSync.progress} />
+              </div>
             </div>
-            {activeSync.stats && Object.keys(activeSync.stats).length > 0 && (
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                {Object.entries(activeSync.stats).map(([key, value]) => (
-                  <div key={key} className="flex justify-between">
-                    <span className="text-muted-foreground">{key}:</span>
-                    <span className="font-medium">{String(value)}</span>
-                  </div>
-                ))}
+          )}
+
+          <section className="rounded-lg border p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Bidirectional sync</h2>
+                <p className="text-sm text-muted-foreground">
+                  Upload the latest Apple Passwords export, simulate the run, then apply it.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => bidirectionalInputRef.current?.click()}
+              >
+                <Upload className="w-4 h-4 mr-2" />
+                Upload Apple CSV
+              </Button>
+            </div>
+
+            {bidirectionalFile ? (
+              <Badge variant="outline" className="w-fit">{bidirectionalFile.name}</Badge>
+            ) : (
+              <p className="text-sm text-muted-foreground">No file selected.</p>
+            )}
+
+            <div className="flex flex-wrap gap-3">
+              <Button
+                variant="outline"
+                disabled={!bidirectionalFile || bidirectionalLoading}
+                onClick={() => handleBidirectionalAction(true)}
+                className="flex-1 min-w-[120px]"
+              >
+                {bidirectionalLoading ? (
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <PlayCircle className="w-4 h-4 mr-2" />
+                )}
+                Simulate
+              </Button>
+              <Button
+                disabled={!bidirectionalFile || bidirectionalLoading}
+                onClick={() => handleBidirectionalAction(false)}
+                className="flex-1 min-w-[120px]"
+              >
+                {bidirectionalLoading ? (
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                )}
+                Sync
+              </Button>
+            </div>
+
+            <SyncStatsView result={bidirectionalResult} />
+          </section>
+
+          <div className="grid gap-6 md:grid-cols-2">
+            <section className="rounded-lg border p-6 space-y-4">
+              <div>
+                <h3 className="text-lg font-semibold">Export Passwords</h3>
+                <p className="text-sm text-muted-foreground">
+                  Push Apple Passwords changes to Bitwarden / VaultWarden.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button variant="outline" onClick={() => exportInputRef.current?.click()}>
+                  <Upload className="w-4 h-4 mr-2" />
+                  Upload Apple CSV
+                </Button>
+                {exportFile && <Badge variant="outline">{exportFile.name}</Badge>}
+              </div>
+              <Button
+                className="w-full"
+                onClick={handleExportAction}
+                disabled={!exportFile || exportLoading}
+              >
+                {exportLoading ? (
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                )}
+                Export to VaultWarden
+              </Button>
+              <SyncStatsView result={exportResult} />
+            </section>
+
+            <section className="rounded-lg border p-6 space-y-4">
+              <div>
+                <h3 className="text-lg font-semibold">Import Passwords</h3>
+                <p className="text-sm text-muted-foreground">
+                  Fetch new passwords from VaultWarden and generate an Apple-ready CSV.
+                </p>
+              </div>
+              <Button
+                className="w-full"
+                onClick={handleImportAction}
+                disabled={importLoading}
+              >
+                {importLoading ? (
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Download className="w-4 h-4 mr-2" />
+                )}
+                Import from VaultWarden
+              </Button>
+              <SyncStatsView result={importResult} />
+            </section>
+          </div>
+
+          <section className="rounded-lg border p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold">Sync history</h3>
+                <p className="text-sm text-muted-foreground">Latest 10 manual syncs.</p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={handleReset}>
+                Reset state
+              </Button>
+            </div>
+            {history.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No sync history available.</p>
+            ) : (
+              <div className="space-y-4">
+                {history.map((log) => {
+                  const stats = (log.stats || {}) as { push?: any; pull?: any };
+                  const pushStats = stats.push || {};
+                  const pullStats = stats.pull || {};
+                  return (
+                    <div key={log.id} className="rounded-md border-l-4 bg-card/40 p-4" style={{
+                      borderColor:
+                        log.status === 'completed'
+                          ? 'rgb(34 197 94)'
+                          : log.status === 'failed'
+                          ? 'rgb(239 68 68)'
+                          : 'rgb(59 130 246)',
+                    }}>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-medium">{log.operation}</p>
+                          <p className="text-xs text-muted-foreground">{formatDate(log.started_at)}</p>
+                        </div>
+                        <Badge variant={log.status === 'completed' ? 'success' : log.status === 'failed' ? 'destructive' : 'default'}>
+                          {log.status}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">{log.message}</p>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs mt-3">
+                        {typeof pushStats.created === 'number' && (
+                          <div>
+                            <span className="text-muted-foreground">Created</span>
+                            <p className="font-medium">{pushStats.created}</p>
+                          </div>
+                        )}
+                        {typeof pushStats.skipped === 'number' && (
+                          <div>
+                            <span className="text-muted-foreground">Skipped</span>
+                            <p className="font-medium">{pushStats.skipped}</p>
+                          </div>
+                        )}
+                        {typeof pullStats.new_entries === 'number' && (
+                          <div>
+                            <span className="text-muted-foreground">New entries</span>
+                            <p className="font-medium">{pullStats.new_entries}</p>
+                          </div>
+                        )}
+                        {log.duration_seconds !== null && (
+                          <div>
+                            <span className="text-muted-foreground">Duration</span>
+                            <p className="font-medium">{log.duration_seconds}s</p>
+                          </div>
+                        )}
+                      </div>
+                      {log.error_message && (
+                        <p className="text-xs text-destructive mt-2">{log.error_message}</p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
-          </CardContent>
-        </Card>
+          </section>
+        </>
       )}
-
-      {/* VaultWarden Sync */}
-      <Card>
-        <CardHeader>
-          <CardTitle>VaultWarden Sync</CardTitle>
-          <CardDescription>Sync passwords with VaultWarden server</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex gap-2">
-            <Button
-              onClick={handleSync}
-              disabled={syncing || !!activeSync}
-              className="flex-1"
-            >
-              {syncing || activeSync ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Syncing...
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                  Sync to VaultWarden
-                </>
-              )}
-            </Button>
-            <Button
-              onClick={handleReset}
-              variant="destructive"
-              disabled={loading || syncing}
-            >
-              <Trash2 className="w-4 h-4 mr-2" />
-              Reset
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* VaultWarden Credentials */}
-      <Card>
-        <CardHeader>
-          <CardTitle>VaultWarden Credentials</CardTitle>
-          <CardDescription>Manage VaultWarden server credentials</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {!showCredentialsForm ? (
-            <div className="flex gap-2">
-              <Button onClick={() => setShowCredentialsForm(true)} className="flex-1">
-                <Lock className="w-4 h-4 mr-2" />
-                Set Credentials
-              </Button>
-              <Button onClick={handleDeleteCredentials} variant="outline">
-                Delete Credentials
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="vw-url">VaultWarden URL</Label>
-                <Input
-                  id="vw-url"
-                  type="url"
-                  placeholder="https://vault.example.com"
-                  value={vaultwardenUrl}
-                  onChange={(e) => setVaultwardenUrl(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="vw-token">API Token</Label>
-                <Input
-                  id="vw-token"
-                  type="password"
-                  placeholder="Enter API token"
-                  value={vaultwardenToken}
-                  onChange={(e) => setVaultwardenToken(e.target.value)}
-                />
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  onClick={handleSetCredentials}
-                  disabled={!vaultwardenUrl || !vaultwardenToken || loading}
-                >
-                  Save Credentials
-                </Button>
-                <Button
-                  onClick={() => {
-                    setShowCredentialsForm(false);
-                    setVaultwardenUrl('');
-                    setVaultwardenToken('');
-                  }}
-                  variant="outline"
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Import/Export */}
-      <div className="grid gap-4 md:grid-cols-2">
-        {/* Import */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Import Passwords</CardTitle>
-            <CardDescription>Import from CSV files</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <Button
-              onClick={() => handleFileSelect('apple')}
-              variant="outline"
-              className="w-full"
-              disabled={loading}
-            >
-              <Upload className="w-4 h-4 mr-2" />
-              Import Apple CSV
-            </Button>
-            <Button
-              onClick={() => handleFileSelect('bitwarden')}
-              variant="outline"
-              className="w-full"
-              disabled={loading}
-            >
-              <Upload className="w-4 h-4 mr-2" />
-              Import Bitwarden CSV
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* Export */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Export Passwords</CardTitle>
-            <CardDescription>Export to CSV files</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <Button
-              onClick={handleExportApple}
-              variant="outline"
-              className="w-full"
-              disabled={loading}
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Export Apple CSV
-            </Button>
-            <Button
-              onClick={handleExportBitwarden}
-              variant="outline"
-              className="w-full"
-              disabled={loading}
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Export Bitwarden CSV
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Sync History */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Sync History</CardTitle>
-          <CardDescription>Recent sync operations</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {history.length === 0 ? (
-            <div className="text-center text-muted-foreground">No sync history</div>
-          ) : (
-            <div className="space-y-3">
-              {history.map((log) => (
-                <div key={log.id} className="border-l-2 pl-4 py-2 space-y-1" style={{
-                  borderColor: log.status === 'completed' ? 'rgb(34 197 94)' :
-                               log.status === 'failed' ? 'rgb(239 68 68)' :
-                               'rgb(59 130 246)'
-                }}>
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">{log.operation}</span>
-                    <Badge variant={log.status === 'completed' ? 'success' : log.status === 'failed' ? 'destructive' : 'default'}>
-                      {log.status}
-                    </Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground">{log.message}</p>
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>{formatDate(log.started_at)}</span>
-                    {log.duration_seconds && (
-                      <span>{log.duration_seconds}s</span>
-                    )}
-                  </div>
-                  {log.stats && Object.keys(log.stats).length > 0 && (
-                    <div className="grid grid-cols-2 gap-1 text-xs mt-2">
-                      {Object.entries(log.stats).map(([key, value]) => (
-                        <div key={key}>
-                          <span className="text-muted-foreground">{key}:</span>{' '}
-                          <span className="font-medium">{String(value)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }

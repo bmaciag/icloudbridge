@@ -91,16 +91,75 @@ export interface RemindersSyncRequest {
   deletion_threshold?: number;
 }
 
-export interface PasswordsSyncRequest {
-  vaultwarden_url?: string;
-  dry_run?: boolean;
-}
-
 export interface SyncResponse {
   status: string;
   message: string;
   stats: Record<string, unknown>;
   log_id: number | null;
+}
+
+export interface PasswordImportStats {
+  new: number;
+  updated: number;
+  duplicates: number;
+  unchanged: number;
+  errors: number;
+  total_processed: number;
+}
+
+export interface PasswordPushStats {
+  queued: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  errors: string[];
+  folders_created: number;
+  simulate: boolean;
+  import?: PasswordImportStats;
+}
+
+export interface PasswordPullStats {
+  new_entries: number;
+  simulate: boolean;
+  download_token?: string;
+  download_filename?: string;
+  download_expires_at?: string;
+}
+
+export interface PasswordsDownloadInfo {
+  token: string;
+  filename: string;
+  expires_at: string;
+}
+
+export interface PasswordsSyncStats {
+  push?: PasswordPushStats | null;
+  pull?: PasswordPullStats | null;
+  total_time: number;
+  simulate: boolean;
+  run_push: boolean;
+  run_pull: boolean;
+}
+
+export interface PasswordsSyncResponse {
+  status: string;
+  simulate: boolean;
+  mode: {
+    push: boolean;
+    pull: boolean;
+  };
+  stats: PasswordsSyncStats;
+  download?: PasswordsDownloadInfo;
+}
+
+export interface PasswordsStatus {
+  enabled: boolean;
+  vaultwarden_url: string | null;
+  vaultwarden_email: string | null;
+  has_credentials: boolean;
+  total_entries: number;
+  by_source: Record<string, number>;
+  last_sync: SyncLog | null;
 }
 
 export interface SyncHistoryResponse {

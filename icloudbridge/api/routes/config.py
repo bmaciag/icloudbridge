@@ -111,7 +111,7 @@ async def update_config(update: ConfigUpdateRequest, config: ConfigDep):
 
     # Store password AFTER username is set
     print(f"[DEBUG] Checking password field: reminders_caldav_password = {update.reminders_caldav_password!r}")
-    if update.reminders_caldav_password is not None:
+    if update.reminders_caldav_password is not None and update.reminders_caldav_password != "":
         print("[DEBUG] Password field is not None, attempting to store...")
         # Store password in keyring
         try:
@@ -139,7 +139,7 @@ async def update_config(update: ConfigUpdateRequest, config: ConfigDep):
         config.passwords.vaultwarden_url = update.passwords_vaultwarden_url
     if update.passwords_vaultwarden_email is not None:
         config.passwords.vaultwarden_email = update.passwords_vaultwarden_email
-    if update.passwords_vaultwarden_password is not None:
+    if update.passwords_vaultwarden_password is not None and update.passwords_vaultwarden_password != "":
         # Store password in keyring
         try:
             email = update.passwords_vaultwarden_email or config.passwords.vaultwarden_email

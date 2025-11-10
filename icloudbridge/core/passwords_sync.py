@@ -1,6 +1,7 @@
 """Password synchronization engine for Apple Passwords and Bitwarden."""
 
 import logging
+import time
 from pathlib import Path
 
 from ..sources.passwords.apple_csv import ApplePasswordsCSVParser
@@ -347,48 +348,28 @@ class PasswordsSyncEngine:
 
         return len(missing_entries)
 
+
     async def compare_sources(
         self, apple_csv: Path, bitwarden_csv: Path
     ) -> dict:
-        """
-        Compare Apple and Bitwarden exports.
+        """Compare Apple and Bitwarden exports."""
 
-        Args:
-            apple_csv: Path to Apple Passwords CSV
-            bitwarden_csv: Path to Bitwarden CSV
-
-        Returns:
-            {
-                'in_apple_only': [PasswordEntry, ...],
-                'in_bitwarden_only': [PasswordEntry, ...],
-                'in_both': [PasswordEntry, ...],
-                'conflicts': [
-                    {'entry': PasswordEntry, 'apple_hash': str, 'bitwarden_hash': str},
-                    ...
-                ]
-            }
-        """
         logger.info("Comparing Apple and Bitwarden exports")
-
-        # Parse both CSVs
         apple_entries = ApplePasswordsCSVParser.parse_file(apple_csv)
         bitwarden_entries = BitwardenCSVParser.parse_file(bitwarden_csv)
 
-        # Build maps by dedup key
         apple_map = {entry.get_dedup_key(): entry for entry in apple_entries}
         bitwarden_map = {entry.get_dedup_key(): entry for entry in bitwarden_entries}
 
         apple_keys = set(apple_map.keys())
         bitwarden_keys = set(bitwarden_map.keys())
 
-        # Find differences
         only_in_apple = [apple_map[k] for k in apple_keys - bitwarden_keys]
         only_in_bitwarden = [bitwarden_map[k] for k in bitwarden_keys - apple_keys]
         in_both_keys = apple_keys & bitwarden_keys
 
         in_both = []
         conflicts = []
-
         for key in in_both_keys:
             apple_entry = apple_map[key]
             bitwarden_entry = bitwarden_map[key]
@@ -397,7 +378,6 @@ class PasswordsSyncEngine:
             bitwarden_hash = bitwarden_entry.get_password_hash()
 
             if apple_hash != bitwarden_hash:
-                # Password mismatch
                 conflicts.append(
                     {
                         "entry": apple_entry,
@@ -409,9 +389,11 @@ class PasswordsSyncEngine:
                 in_both.append(apple_entry)
 
         logger.info(
-            f"Comparison complete: {len(only_in_apple)} in Apple only, "
-            f"{len(only_in_bitwarden)} in Bitwarden only, "
-            f"{len(in_both)} in both, {len(conflicts)} conflicts"
+            "Comparison complete: %s in Apple only, %s in Bitwarden only, %s in both, %s conflicts",
+            len(only_in_apple),
+            len(only_in_bitwarden),
+            len(in_both),
+            len(conflicts),
         )
 
         return {
@@ -423,105 +405,136 @@ class PasswordsSyncEngine:
 
     async def sync(
         self,
-        apple_csv_path: Path,
+        *,
+        apple_csv_path: Path | None,
         vaultwarden_client: "VaultwardenAPIClient",  # type: ignore
         output_apple_csv: Path | None = None,
+        simulate: bool = False,
+        run_push: bool = True,
+        run_pull: bool = True,
     ) -> dict:
-        """
-        Full auto-sync: Apple → VaultWarden (push) and VaultWarden → Apple (pull).
+        """Run push and/or pull phases with optional simulation."""
 
-        Args:
-            apple_csv_path: Path to Apple Passwords CSV export
-            vaultwarden_client: Authenticated VaultwardenAPIClient
-            output_apple_csv: Path for generated Apple CSV with new VaultWarden entries
-                            (defaults to data_dir/apple-import.csv)
+        if not run_push and not run_pull:
+            raise ValueError("At least one sync phase must be enabled")
+        if run_push and apple_csv_path is None:
+            raise ValueError("Apple CSV path is required for push phase")
 
-        Returns:
-            Statistics dictionary:
-            {
-                'push': {'created': 5, 'updated': 12, 'skipped': 2000, ...},
-                'pull': {'new_entries': 3, 'output_file': 'path/to/csv'},
-                'total_time': 5.2
-            }
-        """
-        import time
+        logger.info(
+            "Starting password sync (push=%s, pull=%s, simulate=%s)",
+            run_push,
+            run_pull,
+            simulate,
+        )
 
-        logger.info("Starting full password sync")
         start_time = time.time()
+        push_stats = None
+        pull_stats = None
 
-        stats = {
-            "push": {},
-            "pull": {},
-            "total_time": 0,
+        if run_push and apple_csv_path is not None:
+            push_stats = await self._push_phase(
+                apple_csv_path=apple_csv_path,
+                vaultwarden_client=vaultwarden_client,
+                simulate=simulate,
+            )
+
+        if run_pull:
+            pull_stats = await self._pull_phase(
+                vaultwarden_client=vaultwarden_client,
+                output_apple_csv=output_apple_csv,
+                simulate=simulate,
+            )
+
+        total_time = time.time() - start_time
+        logger.info("Password sync finished in %.1fs", total_time)
+
+        return {
+            "push": push_stats,
+            "pull": pull_stats,
+            "total_time": total_time,
+            "simulate": simulate,
+            "run_push": run_push,
+            "run_pull": run_pull,
         }
 
-        # ========================================
-        # Phase 1: Apple → VaultWarden (Push)
-        # ========================================
-        logger.info("Phase 1: Pushing Apple passwords to VaultWarden")
-
-        # Import Apple CSV to database
+    async def _push_phase(
+        self,
+        *,
+        apple_csv_path: Path,
+        vaultwarden_client: "VaultwardenAPIClient",
+        simulate: bool,
+    ) -> dict:
+        logger.info("Running push phase (simulate=%s)", simulate)
         import_stats = await self.import_apple_csv(apple_csv_path)
 
-        # Get all Apple entries from database
         apple_db_entries = await self.db.get_all_entries(source="apple")
-
-        # Parse Apple CSV for plaintext passwords
-        from ..sources.passwords.apple_csv import ApplePasswordsCSVParser
-
         apple_entries = ApplePasswordsCSVParser.parse_file(apple_csv_path)
+        apple_map = {entry.get_dedup_key(): entry for entry in apple_entries}
 
-        # Build map of dedup_key → PasswordEntry (with plaintext passwords)
-        apple_map = {}
-        for entry in apple_entries:
-            apple_map[entry.get_dedup_key()] = entry
-
-        # Match database entries with plaintext passwords
-        entries_to_push = []
+        entries_to_push: list[PasswordEntry] = []
         for db_entry in apple_db_entries:
             key = (
                 db_entry["title"].lower().strip(),
                 db_entry["url"].lower().strip() if db_entry["url"] else None,
                 db_entry["username"].lower().strip(),
             )
-            if key in apple_map:
-                entries_to_push.append(apple_map[key])
+            entry = apple_map.get(key)
+            if entry:
+                if db_entry.get("folder"):
+                    entry.folder = db_entry["folder"]
+                entries_to_push.append(entry)
 
-        # Push to VaultWarden
-        push_stats = await vaultwarden_client.push_passwords(entries_to_push)
-        stats["push"] = push_stats
-
-        logger.info(
-            f"Push complete: {push_stats['created']} created, "
-            f"{push_stats['updated']} updated, {push_stats['skipped']} skipped"
+        folder_mapping, folders_created = await self._ensure_vaultwarden_folders(
+            entries_to_push,
+            vaultwarden_client,
+            create_missing=not simulate,
         )
 
-        # ========================================
-        # Phase 2: VaultWarden → Apple (Pull)
-        # ========================================
-        logger.info("Phase 2: Pulling new VaultWarden passwords")
+        push_stats = await vaultwarden_client.push_passwords(
+            entries_to_push,
+            folder_mapping=folder_mapping,
+            dry_run=simulate,
+        )
 
-        # Fetch all passwords from VaultWarden
+        return {
+            "import": import_stats,
+            "queued": len(entries_to_push),
+            "created": push_stats["created"],
+            "skipped": push_stats["skipped"],
+            "failed": push_stats["failed"],
+            "errors": push_stats["errors"],
+            "folders_created": folders_created,
+            "simulate": simulate,
+        }
+
+    async def _pull_phase(
+        self,
+        *,
+        vaultwarden_client: "VaultwardenAPIClient",
+        output_apple_csv: Path | None,
+        simulate: bool,
+    ) -> dict:
+        logger.info("Running pull phase (simulate=%s)", simulate)
+
         vw_entries = await vaultwarden_client.pull_passwords()
 
-        # Import VaultWarden entries to database (updates DB state)
-        # This is needed so we can track what's in VaultWarden
-        for entry in vw_entries:
-            try:
-                await self.db.upsert_entry(
-                    title=entry.title,
-                    username=entry.username,
-                    password_hash=entry.get_password_hash(),
-                    url=entry.url,
-                    notes=entry.notes,
-                    otp_auth=entry.otp_auth,
-                    folder=entry.folder,
-                    source="vaultwarden",
-                )
-            except Exception as e:
-                logger.error(f"Failed to update DB with VaultWarden entry {entry.title}: {e}")
+        if not simulate:
+            for entry in vw_entries:
+                try:
+                    await self.db.upsert_entry(
+                        title=entry.title,
+                        username=entry.username,
+                        password_hash=entry.get_password_hash(),
+                        url=entry.url,
+                        notes=entry.notes,
+                        otp_auth=entry.otp_auth,
+                        folder=entry.folder,
+                        source="vaultwarden",
+                    )
+                except Exception as exc:  # pragma: no cover
+                    logger.error("Failed to update DB with VaultWarden entry %s: %s", entry.title, exc)
 
-        # Get Apple entries dedup keys
+        apple_db_entries = await self.db.get_all_entries(source="apple")
         apple_keys = set()
         for db_entry in apple_db_entries:
             key = (
@@ -531,50 +544,59 @@ class PasswordsSyncEngine:
             )
             apple_keys.add(key)
 
-        # Find entries only in VaultWarden (not in Apple)
-        new_entries = []
-        for entry in vw_entries:
-            key = entry.get_dedup_key()
-            if key not in apple_keys:
-                new_entries.append(entry)
+        new_entries = [entry for entry in vw_entries if entry.get_dedup_key() not in apple_keys]
 
-        # Generate Apple CSV if there are new entries
-        output_path = None
-        if new_entries:
+        output_path: Path | None = None
+        if new_entries and not simulate:
             if output_apple_csv is None:
-                # Default output path
-                from ..core.config import AppConfig
-
-                cfg = AppConfig()
-                cfg.ensure_data_dir()
-                output_path = cfg.general.data_dir / "apple-import.csv"
-            else:
-                output_path = output_apple_csv
-
-            ApplePasswordsCSVParser.write_file(new_entries, output_path)
-
-            # Record sync
+                raise ValueError("Output path required when exporting Apple CSV")
+            ApplePasswordsCSVParser.write_file(new_entries, output_apple_csv)
             await self.db.record_sync(
                 sync_type="vaultwarden_pull",
-                file_path=str(output_path),
+                file_path=str(output_apple_csv),
                 entry_count=len(new_entries),
             )
-
-            logger.info(f"Generated Apple CSV with {len(new_entries)} new entries: {output_path}")
-        else:
+            output_path = output_apple_csv
+            logger.info("Generated Apple CSV with %s new entries", len(new_entries))
+        elif not new_entries:
             logger.info("No new entries from VaultWarden")
 
-        stats["pull"] = {
+        return {
             "new_entries": len(new_entries),
-            "output_file": str(output_path) if output_path else None,
+            "download_path": str(output_path) if output_path else None,
+            "simulate": simulate,
         }
 
-        # Total time
-        stats["total_time"] = time.time() - start_time
+    async def _ensure_vaultwarden_folders(
+        self,
+        entries: list[PasswordEntry],
+        vaultwarden_client: "VaultwardenAPIClient",  # type: ignore
+        create_missing: bool = True,
+    ) -> tuple[dict[str, str] | None, int]:
+        """Ensure folders referenced in entries exist in VaultWarden."""
 
-        logger.info(f"Full sync complete in {stats['total_time']:.1f}s")
+        folders_needed = {entry.folder for entry in entries if entry.folder}
+        if not folders_needed:
+            return None, 0
 
-        return stats
+        logger.info(
+            "Ensuring VaultWarden folders for %s tagged entrie(s)", len(folders_needed)
+        )
+
+        existing = await vaultwarden_client.list_folders()
+        folder_map = {folder["name"]: folder["id"] for folder in existing}
+        created = 0
+
+        if create_missing:
+            for folder_name in sorted(folders_needed):
+                if folder_name in folder_map:
+                    continue
+                logger.info("Creating VaultWarden folder: %s", folder_name)
+                folder_id = await vaultwarden_client.create_folder(folder_name)
+                folder_map[folder_name] = folder_id
+                created += 1
+
+        return folder_map, created
 
     def _deduplicate_entries(
         self, entries: list[PasswordEntry]

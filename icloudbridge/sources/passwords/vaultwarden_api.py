@@ -3,10 +3,18 @@
 import base64
 import hashlib
 import logging
+import unicodedata
 from typing import Any
 
 import httpx
+from argon2.low_level import Type, hash_secret_raw
 
+from .bitwarden_crypto import (
+    encrypt_optional_list,
+    encrypt_string,
+    ensure_stretched,
+    decrypt_cipher_string,
+)
 from .models import PasswordEntry
 
 logger = logging.getLogger(__name__)
@@ -43,7 +51,16 @@ class VaultwardenAPIClient:
         self.client_id = client_id or "web"
         self.client_secret = client_secret
         self.access_token: str | None = None
+        normalized_email = self.email.strip().lower()
+        self._normalized_email = normalized_email
+        self._normalized_password = unicodedata.normalize("NFKC", self.password)
+
+        seed = f"{normalized_email}:{self.client_id or 'web'}"
+        self.device_identifier = hashlib.sha256(seed.encode()).hexdigest()
+        self.device_type = 12  # web client
         self._client = httpx.AsyncClient(timeout=30.0)
+        self._master_key: bytes | None = None
+        self._user_key: bytes | None = None
 
     async def authenticate(self) -> None:
         """
@@ -58,9 +75,7 @@ class VaultwardenAPIClient:
             # Bitwarden uses OAuth2 password grant
             auth_url = f"{self.url}/identity/connect/token"
 
-            # Hash the password (Bitwarden requires base64-encoded SHA256 of password)
-            password_hash = hashlib.sha256(self.password.encode()).digest()
-            password_b64 = base64.b64encode(password_hash).decode()
+            password_b64 = await self._derive_password_key()
 
             data = {
                 "grant_type": "password",
@@ -68,6 +83,9 @@ class VaultwardenAPIClient:
                 "password": password_b64,
                 "scope": "api offline_access",
                 "client_id": self.client_id,
+                "deviceIdentifier": self.device_identifier,
+                "deviceType": str(self.device_type),
+                "deviceName": "iCloudBridge",
             }
 
             if self.client_secret:
@@ -88,6 +106,79 @@ class VaultwardenAPIClient:
         except Exception as e:
             logger.error(f"VaultWarden authentication failed: {e}")
             raise Exception(f"Failed to authenticate with VaultWarden: {e}") from e
+
+    async def _derive_password_key(self) -> str:
+        """Derive the password key using the KDF parameters from VaultWarden."""
+
+        kdf_params = await self._get_kdf_parameters()
+        kdf = kdf_params.get("Kdf", 0)
+        email_salt = self._normalized_email.encode("utf-8")
+        password_bytes = self._normalized_password.encode("utf-8")
+
+        if kdf == 0:  # PBKDF2-SHA256
+            iterations = kdf_params.get("KdfIterations") or 100000
+            master_key = hashlib.pbkdf2_hmac(
+                "sha256", password_bytes, email_salt, iterations, dklen=32
+            )
+        elif kdf in (1, 2):  # Argon2id (Vaultwarden historically used 2)
+            iterations = kdf_params.get("KdfIterations") or 3
+            memory_kib = kdf_params.get("KdfMemory") or 64 * 1024
+            parallelism = kdf_params.get("KdfParallelism") or 2
+            master_key = hash_secret_raw(
+                secret=password_bytes,
+                salt=email_salt,
+                time_cost=iterations,
+                memory_cost=memory_kib,
+                parallelism=parallelism,
+                hash_len=32,
+                type=Type.ID,
+            )
+        else:
+            raise Exception(f"Unsupported VaultWarden KDF: {kdf}")
+
+        self._master_key = master_key
+
+        # Bitwarden performs a second PBKDF2 (1 iteration) using the master key as the
+        # "password" and the original password as the salt before sending it to /token.
+        server_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            master_key,
+            password_bytes,
+            1,
+            dklen=32,
+        )
+
+        return base64.b64encode(server_hash).decode()
+
+    async def _get_kdf_parameters(self) -> dict[str, Any]:
+        """Fetch user-specific KDF settings from VaultWarden."""
+
+        prelogin_url = f"{self.url}/identity/accounts/prelogin"
+        payload = {"email": self.email, "scope": "api offline_access"}
+
+        try:
+            response = await self._client.post(prelogin_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            normalized = {k.lower(): v for k, v in data.items() if isinstance(k, str)}
+            if "kdf" not in normalized:
+                logger.warning("Prelogin response missing Kdf; falling back to defaults: %s", data)
+                return {"Kdf": 0, "KdfIterations": 100000}
+            return {
+                "Kdf": normalized.get("kdf", 0),
+                "KdfIterations": normalized.get("kdfiterations") or normalized.get("kdf_iterations"),
+                "KdfMemory": normalized.get("kdfmemory") or normalized.get("kdf_memory"),
+                "KdfParallelism": normalized.get("kdfparallelism") or normalized.get("kdf_parallelism"),
+            }
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                logger.warning("VaultWarden prelogin endpoint not found; assuming PBKDF2 defaults")
+                return {"Kdf": 0, "KdfIterations": 100000}
+            logger.error(f"Prelogin request failed: {exc.response.text}")
+            raise
+        except Exception as exc:
+            logger.error(f"Failed to fetch KDF parameters: {exc}")
+            return {"Kdf": 0, "KdfIterations": 100000}
 
     def _ensure_authenticated(self) -> None:
         """Ensure client is authenticated before making API calls."""
@@ -118,6 +209,8 @@ class VaultwardenAPIClient:
         logger.info("Fetching passwords from VaultWarden")
 
         try:
+            user_key = await self._ensure_user_key()
+
             # Use Bitwarden sync API to get all data
             sync_url = f"{self.url}/api/sync"
             response = await self._client.get(sync_url, headers=self._get_headers())
@@ -128,7 +221,13 @@ class VaultwardenAPIClient:
             folders_data = sync_data.get("folders", [])
 
             # Build folder ID -> name mapping
-            folder_map = {f["id"]: f["name"] for f in folders_data if f.get("id") and f.get("name")}
+            folder_map: dict[str, str] = {}
+            for folder in folders_data:
+                folder_id = folder.get("id")
+                enc_name = folder.get("name")
+                if not folder_id or not enc_name:
+                    continue
+                folder_map[folder_id] = self._maybe_decrypt(enc_name, user_key)
 
             entries = []
             for cipher in ciphers:
@@ -143,21 +242,33 @@ class VaultwardenAPIClient:
                 # Get folder name
                 folder_name = folder_map.get(folder_id) if folder_id else None
 
-                # Extract URL from URIs array
-                url = None
+                # Extract URLs from URIs array
+                urls = []
                 if login_data.get("uris"):
-                    url = login_data["uris"][0].get("uri")
+                    for uri_entry in login_data["uris"]:
+                        uri = uri_entry.get("uri")
+                        if uri:
+                            urls.append(uri)
 
                 # Extract fields
+                title = self._maybe_decrypt(cipher.get("name"), user_key) or "Untitled"
+                notes = self._maybe_decrypt(cipher.get("notes"), user_key)
+                username = self._maybe_decrypt(login_data.get("username"), user_key) or ""
+                password = self._maybe_decrypt(login_data.get("password"), user_key) or ""
+                totp = self._maybe_decrypt(login_data.get("totp"), user_key)
+
                 entry = PasswordEntry(
-                    title=cipher.get("name", "Untitled"),
-                    username=login_data.get("username", ""),
-                    password=login_data.get("password", ""),
-                    url=url,
-                    notes=cipher.get("notes"),
-                    otp_auth=login_data.get("totp"),
+                    title=title,
+                    username=username,
+                    password=password,
+                    url=None,
+                    notes=notes,
+                    otp_auth=totp,
                     folder=folder_name,
                 )
+
+                for uri in urls:
+                    entry.add_url(self._maybe_decrypt(uri, user_key) or uri)
 
                 entries.append(entry)
 
@@ -173,7 +284,10 @@ class VaultwardenAPIClient:
             raise Exception(f"Failed to pull passwords: {e}") from e
 
     async def push_passwords(
-        self, entries: list[PasswordEntry], folder_mapping: dict[str, str] | None = None
+        self,
+        entries: list[PasswordEntry],
+        folder_mapping: dict[str, str] | None = None,
+        dry_run: bool = False,
     ) -> dict[str, Any]:
         """
         Push password entries to VaultWarden using Bitwarden Ciphers API.
@@ -205,6 +319,7 @@ class VaultwardenAPIClient:
             "skipped": 0,
             "failed": 0,
             "errors": [],
+            "dry_run": dry_run,
         }
 
         # Get existing ciphers for comparison
@@ -217,21 +332,28 @@ class VaultwardenAPIClient:
             try:
                 dedup_key = entry.get_dedup_key()
 
+                create_entry = True
                 if dedup_key in existing_map:
                     existing = existing_map[dedup_key]
-                    if existing.password == entry.password:
+                    create_entry = existing.password != entry.password
+                    if not create_entry:
                         stats["skipped"] += 1
                         logger.debug(f"Skipped unchanged: {entry.title}")
-                    else:
-                        # TODO: Implement update - requires cipher ID
-                        stats["skipped"] += 1
-                        logger.debug(f"Skipped existing (update not implemented): {entry.title}")
+                        continue
+
+                if dry_run:
+                    if create_entry:
+                        stats["created"] += 1
+                        logger.debug(f"[Dry Run] Would create: {entry.title}")
                     continue
 
-                # Create new cipher
-                await self._create_cipher(entry, folder_mapping)
-                stats["created"] += 1
-                logger.debug(f"Created: {entry.title}")
+                if create_entry:
+                    await self._create_cipher(entry, folder_mapping)
+                    stats["created"] += 1
+                    logger.debug(f"Created: {entry.title}")
+                else:
+                    stats["skipped"] += 1
+                    logger.debug(f"Skipped (update not implemented): {entry.title}")
 
             except Exception as e:
                 error_msg = f"Failed to push {entry.title}: {e}"
@@ -260,16 +382,20 @@ class VaultwardenAPIClient:
         self._ensure_authenticated()
 
         try:
+            user_key = await self._ensure_user_key()
             folders_url = f"{self.url}/api/folders"
             response = await self._client.get(folders_url, headers=self._get_headers())
             response.raise_for_status()
 
             folders_data = response.json()
-            return [
-                {"id": f["id"], "name": f["name"]}
-                for f in folders_data.get("data", [])
-                if f.get("id") and f.get("name")
-            ]
+            decrypted: list[dict[str, str]] = []
+            for folder in folders_data.get("data", []):
+                folder_id = folder.get("id")
+                enc_name = folder.get("name")
+                if not folder_id or not enc_name:
+                    continue
+                decrypted.append({"id": folder_id, "name": self._maybe_decrypt(enc_name, user_key)})
+            return decrypted
         except Exception as e:
             logger.error(f"Failed to list folders: {e}")
             raise Exception(f"Failed to list folders: {e}") from e
@@ -290,8 +416,9 @@ class VaultwardenAPIClient:
         self._ensure_authenticated()
 
         try:
+            user_key = await self._ensure_user_key()
             folders_url = f"{self.url}/api/folders"
-            payload = {"name": name}
+            payload = {"name": encrypt_string(name, user_key)}
 
             response = await self._client.post(
                 folders_url, headers=self._get_headers(), json=payload
@@ -315,6 +442,7 @@ class VaultwardenAPIClient:
             folder_mapping: Optional folder name to ID mapping
         """
         # Determine folder ID
+        user_key = await self._ensure_user_key()
         folder_id = None
         if entry.folder and folder_mapping:
             folder_id = folder_mapping.get(entry.folder)
@@ -322,20 +450,34 @@ class VaultwardenAPIClient:
         # Build cipher payload (Bitwarden cipher format)
         cipher_data = {
             "type": 1,  # Login type
-            "name": entry.title,
-            "notes": entry.notes,
+            "name": encrypt_string(entry.title, user_key),
+            "notes": encrypt_string(entry.notes, user_key) if entry.notes else None,
             "favorite": False,
             "folderId": folder_id,
             "login": {
-                "username": entry.username,
-                "password": entry.password,
-                "totp": entry.otp_auth,
+                "username": encrypt_string(entry.username, user_key) if entry.username else None,
+                "password": encrypt_string(entry.password, user_key) if entry.password else None,
+                "totp": encrypt_string(entry.otp_auth, user_key) if entry.otp_auth else None,
             },
         }
 
-        # Add URL if present
-        if entry.url:
-            cipher_data["login"]["uris"] = [{"uri": entry.url, "match": None}]
+        # Add URLs if present
+        urls = entry.get_all_urls()
+        if urls:
+            cipher_data["login"]["uris"] = encrypt_optional_list(urls, user_key)
+
+        # Remove None values to keep payload tidy
+        if cipher_data["login"].get("uris") is None:
+            cipher_data["login"].pop("uris", None)
+        if cipher_data["login"].get("username") is None:
+            cipher_data["login"].pop("username", None)
+        if cipher_data["login"].get("password") is None:
+            cipher_data["login"].pop("password", None)
+        if cipher_data["login"].get("totp") is None:
+            cipher_data["login"].pop("totp", None)
+
+        if cipher_data.get("notes") is None:
+            cipher_data.pop("notes", None)
 
         # Create cipher via API
         ciphers_url = f"{self.url}/api/ciphers"
@@ -343,6 +485,36 @@ class VaultwardenAPIClient:
             ciphers_url, headers=self._get_headers(), json=cipher_data
         )
         response.raise_for_status()
+
+    async def _ensure_user_key(self) -> bytes:
+        if self._user_key is not None:
+            return self._user_key
+        if self._master_key is None:
+            raise RuntimeError("Master key not available; authenticate first")
+
+        profile_url = f"{self.url}/api/accounts/profile"
+        response = await self._client.get(profile_url, headers=self._get_headers())
+        response.raise_for_status()
+        profile = response.json()
+        encrypted_key = profile.get("key")
+        if not encrypted_key:
+            raise RuntimeError("Profile missing encryption key")
+
+        decrypted = decrypt_cipher_string(encrypted_key, self._master_key)
+        # user key should be 64 bytes; if shorter, stretch
+        if len(decrypted) < 64:
+            decrypted = ensure_stretched(decrypted)
+        self._user_key = decrypted
+        return self._user_key
+
+    def _maybe_decrypt(self, value: str | None, key: bytes) -> str | None:
+        if not value:
+            return value
+        try:
+            decrypted = decrypt_cipher_string(value, key)
+            return decrypted.decode("utf-8")
+        except Exception:
+            return value
 
     async def close(self) -> None:
         """Close the HTTP client."""

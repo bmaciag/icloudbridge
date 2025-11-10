@@ -249,15 +249,19 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
 
   // Auto-connect on mount if enabled
   useEffect(() => {
-    if (autoConnect) {
-      connect();
+    if (!autoConnect) {
+      return;
     }
+
+    connect();
 
     // Cleanup on unmount
     return () => {
       disconnect();
     };
-  }, [autoConnect, connect, disconnect]);
+    // Intentionally omit connect/disconnect from deps to avoid reconnect loops
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoConnect]);
 
   return {
     isConnected,

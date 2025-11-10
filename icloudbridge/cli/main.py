@@ -477,6 +477,10 @@ def notes_sync(
                         deletion_threshold=deletion_threshold,
                         sync_mode=mode,
                     )
+                except RuntimeError as e:
+                    console.print(f"[red]Error syncing {folder_name}: {e}[/red]")
+                    logger.exception("Folder sync failed")
+                    continue
 
                 # Aggregate stats
                 for key in total_stats:
@@ -519,19 +523,6 @@ def notes_sync(
                     )
                 else:
                     console.print(f"  [dim]No changes needed ({stats['unchanged']} unchanged)[/dim]")
-
-            except RuntimeError as e:
-                # Check if it's a deletion threshold error
-                if "Deletion threshold exceeded" in str(e):
-                    console.print(f"  [red]✗ {e}[/red]")
-                    console.print("  [yellow]Use --deletion-threshold -1 to bypass this check[/yellow]")
-                    raise typer.Exit(1) from e
-                else:
-                    console.print(f"  [red]✗ Failed: {e}[/red]")
-                    logging.exception(f"Failed to sync folder {folder_name}")
-            except Exception as e:
-                console.print(f"  [red]✗ Failed: {e}[/red]")
-                logging.exception(f"Failed to sync folder {folder_name}")
 
         # Show summary
         if dry_run:
@@ -1649,6 +1640,10 @@ def passwords_sync(
     db_path = cfg.passwords_db_path
     db = PasswordsDB(db_path)
 
+    cfg.ensure_data_dir()
+    default_output = cfg.general.data_dir / "apple-import.csv"
+    output_path = output or default_output
+
     async def run_sync():
         await db.initialize()
 
@@ -1666,7 +1661,14 @@ def passwords_sync(
 
         # Run full sync
         engine = PasswordsSyncEngine(db)
-        return await engine.sync(apple_csv, vw_client, output)
+        return await engine.sync(
+            apple_csv_path=apple_csv,
+            vaultwarden_client=vw_client,
+            output_apple_csv=output_path,
+            simulate=False,
+            run_push=True,
+            run_pull=True,
+        )
 
     try:
         stats = asyncio.run(run_sync())

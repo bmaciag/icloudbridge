@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { FolderBrowserDialog } from '@/components/FolderBrowserDialog';
 import { useAppStore } from '@/store/app-store';
 import apiClient from '@/lib/api-client';
-import type { AppConfig, SetupVerificationResponse } from '@/types/api';
+import type { AppConfig, PasswordsStatus, SetupVerificationResponse } from '@/types/api';
 
 export default function Settings() {
   const { config, setConfig, setIsFirstRun, resetWizard } = useAppStore();
@@ -21,6 +21,21 @@ export default function Settings() {
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const [verification, setVerification] = useState<SetupVerificationResponse | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [passwordStatus, setPasswordStatus] = useState<PasswordsStatus | null>(null);
+  const [passwordStatusLoading, setPasswordStatusLoading] = useState(false);
+  const [vaultCredsLoading, setVaultCredsLoading] = useState(false);
+
+  const loadPasswordStatus = useCallback(async () => {
+    try {
+      setPasswordStatusLoading(true);
+      const status = await apiClient.getPasswordsStatus();
+      setPasswordStatus(status);
+    } catch (err) {
+      console.error('Failed to load passwords status:', err);
+    } finally {
+      setPasswordStatusLoading(false);
+    }
+  }, []);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -29,13 +44,14 @@ export default function Settings() {
       setSuccess(null);
       const data = await apiClient.getConfig();
       setConfig(data);
-      setFormData(data);
+      setFormData({ ...data, passwords_vaultwarden_password: '' });
+      await loadPasswordStatus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load configuration');
+      setError(formatError(err, 'Failed to load configuration'));
     } finally {
       setLoading(false);
     }
-  }, [setConfig]);
+  }, [setConfig, loadPasswordStatus]);
 
   useEffect(() => {
     loadConfig();
@@ -43,7 +59,7 @@ export default function Settings() {
 
   useEffect(() => {
     if (config) {
-      setFormData(config);
+      setFormData({ ...config, passwords_vaultwarden_password: '' });
     }
   }, [config]);
 
@@ -64,6 +80,27 @@ export default function Settings() {
     } finally {
       setVerifying(false);
     }
+  };
+
+  const formatError = (err: unknown, fallback: string) => {
+    if (err instanceof Error) {
+      return err.message;
+    }
+    if (typeof err === 'string') {
+      return err;
+    }
+    if (err && typeof err === 'object') {
+      const detail = (err as { detail?: unknown }).detail;
+      if (typeof detail === 'string') {
+        return detail;
+      }
+      try {
+        return JSON.stringify(err);
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
   };
 
   const handleReset = () => {
@@ -116,17 +153,21 @@ export default function Settings() {
         updatedFormData.passwords_enabled = false;
         updatedFormData.passwords_vaultwarden_url = '';
         updatedFormData.passwords_vaultwarden_email = '';
-        updatedFormData.passwords_vaultwarden_password = '';
+        delete (updatedFormData as Record<string, unknown>).passwords_vaultwarden_password;
       }
 
       // Save the updated config
       const updated = await apiClient.updateConfig(updatedFormData);
       setConfig(updated);
-      setFormData(updated);
+      setFormData({ ...updated, passwords_vaultwarden_password: '' });
+
+      if (service === 'passwords') {
+        await loadPasswordStatus();
+      }
 
       setSuccess(`${serviceName} reset successfully`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : `Failed to reset ${serviceName}`);
+      setError(formatError(err, `Failed to reset ${serviceName}`));
     } finally {
       setResetting(null);
     }
@@ -151,8 +192,66 @@ export default function Settings() {
       // Reload the page to show the wizard
       window.location.reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to reset configuration');
+      setError(formatError(err, 'Failed to reset configuration'));
       setLoading(false);
+    }
+  };
+
+  const handleSaveVaultwardenCredentials = async () => {
+    if (!formData.passwords_vaultwarden_email || !formData.passwords_vaultwarden_password) {
+      setError('Enter both email and password to save VaultWarden credentials.');
+      return;
+    }
+
+    try {
+      setVaultCredsLoading(true);
+      setError(null);
+      setSuccess(null);
+      await apiClient.setVaultwardenCredentials(
+        formData.passwords_vaultwarden_email,
+        formData.passwords_vaultwarden_password,
+        undefined,
+        undefined,
+        formData.passwords_vaultwarden_url,
+      );
+      setFormData((prev) => ({ ...prev, passwords_vaultwarden_password: '' }));
+      await loadPasswordStatus();
+      setSuccess('VaultWarden credentials saved securely.');
+    } catch (err) {
+      setError(formatError(err, 'Failed to save VaultWarden credentials'));
+    } finally {
+      setVaultCredsLoading(false);
+    }
+  };
+
+  const handleDeleteVaultwardenCredentials = async () => {
+    if (!passwordStatus?.has_credentials) {
+      setError('No VaultWarden credentials are stored.');
+      return;
+    }
+
+    if (!formData.passwords_vaultwarden_email && !passwordStatus.vaultwarden_email) {
+      setError('Enter the VaultWarden email before deleting credentials.');
+      return;
+    }
+
+    const emailToDelete = formData.passwords_vaultwarden_email || passwordStatus.vaultwarden_email || '';
+
+    if (!confirm(`Delete stored VaultWarden credentials for ${emailToDelete}?`)) {
+      return;
+    }
+
+    try {
+      setVaultCredsLoading(true);
+      setError(null);
+      setSuccess(null);
+      await apiClient.deleteVaultwardenCredentials(emailToDelete);
+      await loadPasswordStatus();
+      setSuccess('VaultWarden credentials removed from keychain.');
+    } catch (err) {
+      setError(formatError(err, 'Failed to delete VaultWarden credentials'));
+    } finally {
+      setVaultCredsLoading(false);
     }
   };
 
@@ -162,11 +261,15 @@ export default function Settings() {
       setError(null);
       setSuccess(null);
 
-      const updated = await apiClient.updateConfig(formData);
+      const payload = { ...formData };
+      delete (payload as Record<string, unknown>).passwords_vaultwarden_password;
+
+      const updated = await apiClient.updateConfig(payload);
       setConfig(updated);
+      setFormData({ ...updated, passwords_vaultwarden_password: '' });
       setSuccess('Configuration saved successfully');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save configuration');
+      setError(formatError(err, 'Failed to save configuration'));
     } finally {
       setLoading(false);
     }
@@ -642,6 +745,13 @@ export default function Settings() {
               <p className="text-sm text-muted-foreground">
                 Sync passwords with Bitwarden or Vaultwarden
               </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {passwordStatusLoading
+                  ? 'Checking credentials…'
+                  : passwordStatus?.has_credentials
+                  ? 'Credentials stored securely in macOS Keychain.'
+                  : 'No VaultWarden credentials stored yet.'}
+              </p>
             </div>
             <Switch
               checked={formData.passwords_enabled || false}
@@ -710,6 +820,32 @@ export default function Settings() {
                     })
                   }
                 />
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleSaveVaultwardenCredentials}
+                    disabled={
+                      vaultCredsLoading ||
+                      !formData.passwords_vaultwarden_email ||
+                      !formData.passwords_vaultwarden_password
+                    }
+                  >
+                    {vaultCredsLoading ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <CheckCircle className="w-4 h-4 mr-2" />
+                    )}
+                    Save Credentials
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={handleDeleteVaultwardenCredentials}
+                    disabled={vaultCredsLoading || !passwordStatus?.has_credentials}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete Stored Credentials
+                  </Button>
+                </div>
               </div>
             </>
           )}

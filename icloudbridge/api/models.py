@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from icloudbridge.core.models import SyncStatus
 
@@ -207,6 +207,16 @@ class PasswordsSyncRequest(BaseModel):
 
     apple_csv_path: str | None = None
     output_apple_csv: str | None = None
+
+
+class VaultwardenCredentialRequest(BaseModel):
+    """Request body for storing VaultWarden credentials."""
+
+    email: EmailStr
+    password: str
+    client_id: str | None = None
+    client_secret: str | None = None
+    url: str | None = None
 
 
 class ScheduleCreate(BaseModel):

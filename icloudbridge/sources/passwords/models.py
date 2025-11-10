@@ -1,7 +1,7 @@
 """Data models for password entries."""
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -17,6 +17,7 @@ class PasswordEntry:
         notes: Additional notes
         otp_auth: OTP/TOTP secret (otpauth:// URL)
         folder: Folder or collection name
+        extra_urls: Additional URLs that point to the same login
     """
 
     title: str
@@ -26,6 +27,7 @@ class PasswordEntry:
     notes: str | None = None
     otp_auth: str | None = None
     folder: str | None = None
+    extra_urls: list[str] = field(default_factory=list)
 
     def get_password_hash(self) -> str:
         """
@@ -48,6 +50,37 @@ class PasswordEntry:
             self.url.lower().strip() if self.url else None,
             self.username.lower().strip(),
         )
+
+    def add_url(self, url: str) -> None:
+        """Add an additional URL if not already tracked."""
+
+        if not url:
+            return
+
+        url = url.strip()
+        if not url:
+            return
+
+        if not self.url:
+            self.url = url
+            return
+
+        if url == self.url:
+            return
+
+        if url not in self.extra_urls:
+            self.extra_urls.append(url)
+
+    def get_all_urls(self) -> list[str]:
+        """Return list of all URLs associated with the entry."""
+
+        urls = []
+        if self.url:
+            urls.append(self.url)
+        for extra in self.extra_urls:
+            if extra and extra not in urls:
+                urls.append(extra)
+        return urls
 
     def __eq__(self, other):
         """Check equality based on dedup key."""
