@@ -93,6 +93,7 @@ class ConfigResponse(BaseModel):
     notes_enabled: bool
     reminders_enabled: bool
     passwords_enabled: bool
+    photos_enabled: bool
     notes_remote_folder: str | None = None
     notes_folder_mappings: dict[str, dict[str, str]] = Field(default_factory=dict)
     reminders_caldav_url: str | None = None
@@ -101,6 +102,8 @@ class ConfigResponse(BaseModel):
     reminders_calendar_mappings: dict[str, str] = Field(default_factory=dict)
     passwords_vaultwarden_url: str | None = None
     passwords_vaultwarden_email: str | None = None
+    photos_default_album: str | None = None
+    photo_sources: dict[str, dict[str, str | bool]] = Field(default_factory=dict)
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -110,6 +113,7 @@ class ConfigUpdateRequest(BaseModel):
     notes_enabled: bool | None = None
     reminders_enabled: bool | None = None
     passwords_enabled: bool | None = None
+    photos_enabled: bool | None = None
     notes_remote_folder: str | None = None
     notes_folder_mappings: dict[str, dict[str, str]] | None = None
     reminders_caldav_url: str | None = None
@@ -126,6 +130,8 @@ class ConfigUpdateRequest(BaseModel):
         default=None,
         description="Password will be stored in system keyring",
     )
+    photos_default_album: str | None = None
+    photo_sources: dict[str, dict[str, str | bool]] | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -198,6 +204,16 @@ class RemindersSyncRequest(BaseModel):
     caldav_calendar: str | None = None
     auto: bool = True
     dry_run: bool = False
+
+
+class PhotoSyncRequest(BaseModel):
+    """Request model for photos sync."""
+
+    sources: list[str] | None = Field(
+        default=None,
+        description="Optional list of configured source keys to limit the scan",
+    )
+    dry_run: bool = Field(default=False, description="Preview imports without sending to Photos")
     skip_deletions: bool = False
     deletion_threshold: int = 5
 

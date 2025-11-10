@@ -14,6 +14,7 @@ from rich.table import Table
 
 from icloudbridge import __version__
 from icloudbridge.core.config import load_config
+from icloudbridge.core.photos_sync import PhotoSyncEngine
 from icloudbridge.core.reminders_sync import RemindersSyncEngine
 from icloudbridge.core.rich_notes_export import RichNotesExporter
 from icloudbridge.core.sync import NotesSyncEngine
@@ -174,6 +175,13 @@ def config(
             cfg.reminders.caldav_username if cfg.reminders.caldav_username else "Not set",
         )
 
+        # Photos settings
+        table.add_row("", "")
+        table.add_row("[bold]Photos[/bold]", "")
+        table.add_row("Enabled", "✓" if cfg.photos.enabled else "✗")
+        table.add_row("Default Album", cfg.photos.default_album)
+        table.add_row("Sources", str(len(cfg.photos.sources)))
+
         console.print(table)
     else:
         console.print(
@@ -188,6 +196,38 @@ def config(
         console.print(
             "[dim]Use --init to create a default config file[/dim]",
         )
+
+
+@app.command()
+def photos(
+    ctx: typer.Context,
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview new imports without sending anything to Photos"),
+    source: list[str] = typer.Option(None, "--source", "-s", help="Limit sync to specific source keys"),
+):
+    """Synchronize configured photo watch folders into Apple Photos."""
+
+    cfg = ctx.obj["config"]
+    if not cfg.photos.enabled:
+        console.print("[red]Photos sync is disabled in the configuration.[/red]")
+        raise typer.Exit(1)
+
+    engine = PhotoSyncEngine(cfg.photos, cfg.general.data_dir)
+    stats = asyncio.run(engine.sync(sources=source or None, dry_run=dry_run))
+
+    table = Table(title="Photo Sync Results")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Sources scanned", ", ".join(source or engine.scanner.available_sources()) or "None")
+    table.add_row("Files discovered", str(stats.get("discovered", 0)))
+    table.add_row("New assets", str(stats.get("new_assets", 0)))
+    table.add_row("Imported", str(stats.get("imported", 0)))
+    table.add_row("Dry run", "Yes" if stats.get("dry_run") else "No")
+
+    albums = stats.get("albums")
+    if albums:
+        table.add_row("Album breakdown", ", ".join(f"{name} ({count})" for name, count in albums.items()))
+
+    console.print(table)
 
 
 @app.command("db-paths")

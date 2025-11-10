@@ -46,6 +46,24 @@ class ListConfig(BaseSettings):
     calendar: str | None = None
 
 
+class PhotoSourceConfig(BaseSettings):
+    """Configuration for a single photo source/watch folder."""
+
+    path: Path
+    recursive: bool = True
+    include_images: bool = True
+    include_videos: bool = True
+    album: str | None = None
+    delete_after_import: bool = False
+    metadata_sidecars: bool = True
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def expand_path(cls, v: str | Path) -> Path:
+        """Expand user home directory in source paths."""
+        return Path(v).expanduser().resolve()
+
+
 class NotesConfig(BaseSettings):
     """Configuration for Notes synchronization."""
 
@@ -139,6 +157,25 @@ class RemindersConfig(BaseSettings):
             return self.caldav_password
 
         return None
+
+
+class PhotosConfig(BaseSettings):
+    """Configuration for Photos synchronization."""
+
+    enabled: bool = False
+    hash_algorithm: str = "sha256"
+    default_album: str = "iCloudBridge Imports"
+    sources: dict[str, PhotoSourceConfig] = Field(default_factory=dict)
+
+    @field_validator("hash_algorithm", mode="before")
+    @classmethod
+    def validate_hash_algorithm(cls, v: str) -> str:
+        """Validate supported hash algorithms."""
+        normalized = v.lower()
+        supported = {"sha256"}
+        if normalized not in supported:
+            raise ValueError(f"Unsupported hash algorithm '{v}'. Supported: {', '.join(sorted(supported))}")
+        return normalized
 
 
 class PasswordsConfig(BaseSettings):
@@ -235,6 +272,7 @@ class AppConfig(BaseSettings):
     general: GeneralConfig = Field(default_factory=GeneralConfig)
     notes: NotesConfig = Field(default_factory=NotesConfig)
     reminders: RemindersConfig = Field(default_factory=RemindersConfig)
+    photos: PhotosConfig = Field(default_factory=PhotosConfig)
     passwords: PasswordsConfig = Field(default_factory=PasswordsConfig)
 
     @classmethod
@@ -297,6 +335,11 @@ class AppConfig(BaseSettings):
     def passwords_db_path(self) -> Path:
         """Path to the Passwords sync database."""
         return self.general.data_dir / "passwords.db"
+
+    @property
+    def photos_db_path(self) -> Path:
+        """Path to the Photos sync database."""
+        return self.general.data_dir / "photos.db"
 
     @property
     def default_config_path(self) -> Path:

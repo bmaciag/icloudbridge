@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from icloudbridge.api.dependencies import ConfigDep
 from icloudbridge.api.models import ConfigResponse, ConfigUpdateRequest
-from icloudbridge.core.config import FolderMapping
+from icloudbridge.core.config import FolderMapping, PhotoSourceConfig
 from icloudbridge.utils.credentials import CredentialStore
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,22 @@ router = APIRouter()
 def _serialize_folder_mappings(mappings: dict[str, FolderMapping]) -> dict[str, dict[str, str]]:
     """Convert FolderMapping objects into primitive dicts for responses."""
     return {apple_folder: mapping.model_dump() for apple_folder, mapping in mappings.items()}
+
+
+def _serialize_photo_sources(sources: dict[str, PhotoSourceConfig]) -> dict[str, dict[str, str | bool]]:
+    """Convert PhotoSourceConfig objects into primitives for responses."""
+    serialized: dict[str, dict[str, str | bool]] = {}
+    for name, source in sources.items():
+        serialized[name] = {
+            "path": str(source.path),
+            "recursive": source.recursive,
+            "include_images": source.include_images,
+            "include_videos": source.include_videos,
+            "album": source.album or "",
+            "delete_after_import": source.delete_after_import,
+            "metadata_sidecars": source.metadata_sidecars,
+        }
+    return serialized
 
 
 @router.get("", response_model=ConfigResponse)
@@ -32,6 +48,7 @@ async def get_config(config: ConfigDep):
         notes_enabled=config.notes.enabled,
         reminders_enabled=config.reminders.enabled,
         passwords_enabled=config.passwords.enabled,
+        photos_enabled=config.photos.enabled,
         notes_remote_folder=str(config.notes.remote_folder) if config.notes.remote_folder else None,
         notes_folder_mappings=_serialize_folder_mappings(config.notes.folder_mappings),
         reminders_caldav_url=config.reminders.caldav_url,
@@ -40,6 +57,8 @@ async def get_config(config: ConfigDep):
         reminders_calendar_mappings=config.reminders.calendar_mappings or {},
         passwords_vaultwarden_url=config.passwords.vaultwarden_url,
         passwords_vaultwarden_email=config.passwords.vaultwarden_email,
+        photos_default_album=config.photos.default_album,
+        photo_sources=_serialize_photo_sources(config.photos.sources),
     )
 
 
@@ -177,12 +196,31 @@ async def update_config(update: ConfigUpdateRequest, config: ConfigDep):
             detail=f"Failed to save configuration: {str(e)}"
         )
 
+    # Update photos config
+    if update.photos_enabled is not None:
+        config.photos.enabled = update.photos_enabled
+    if update.photos_default_album is not None:
+        config.photos.default_album = update.photos_default_album
+    if update.photo_sources is not None:
+        try:
+            config.photos.sources = {
+                name: PhotoSourceConfig(**src)
+                for name, src in update.photo_sources.items()
+            }
+        except Exception as exc:
+            logger.error(f"Invalid photo sources configuration: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid photo sources configuration: {exc}",
+            )
+
     return ConfigResponse(
         data_dir=str(config.general.data_dir),
         config_file=str(config.default_config_path) if config.default_config_path else None,
         notes_enabled=config.notes.enabled,
         reminders_enabled=config.reminders.enabled,
         passwords_enabled=config.passwords.enabled,
+        photos_enabled=config.photos.enabled,
         notes_remote_folder=str(config.notes.remote_folder) if config.notes.remote_folder else None,
         notes_folder_mappings=_serialize_folder_mappings(config.notes.folder_mappings),
         reminders_caldav_url=config.reminders.caldav_url,
@@ -191,6 +229,8 @@ async def update_config(update: ConfigUpdateRequest, config: ConfigDep):
         reminders_calendar_mappings=config.reminders.calendar_mappings or {},
         passwords_vaultwarden_url=config.passwords.vaultwarden_url,
         passwords_vaultwarden_email=config.passwords.vaultwarden_email,
+        photos_default_album=config.photos.default_album,
+        photo_sources=_serialize_photo_sources(config.photos.sources),
     )
 
 

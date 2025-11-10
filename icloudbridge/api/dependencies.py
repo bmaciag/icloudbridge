@@ -15,9 +15,11 @@ from fastapi import Depends
 
 from icloudbridge.core.config import AppConfig, load_config
 from icloudbridge.core.passwords_sync import PasswordsSyncEngine
+from icloudbridge.core.photos_sync import PhotoSyncEngine
 from icloudbridge.core.reminders_sync import RemindersSyncEngine
 from icloudbridge.core.sync import NotesSyncEngine
 from icloudbridge.utils.db import NotesDB, PasswordsDB, RemindersDB
+from icloudbridge.utils.photos_db import PhotosDB
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +110,19 @@ async def get_passwords_sync_engine(
     return engine
 
 
+async def get_photos_sync_engine(
+    config: Annotated[AppConfig, Depends(get_config)]
+) -> PhotoSyncEngine:
+    """Get an initialized photo sync engine."""
+
+    if not config.photos.enabled:
+        raise ValueError("Photo sync is disabled in configuration")
+
+    engine = PhotoSyncEngine(config.photos, config.general.data_dir)
+    await engine.initialize()
+    return engine
+
+
 async def get_notes_db(config: Annotated[AppConfig, Depends(get_config)]) -> NotesDB:
     """Get a notes database connection.
 
@@ -153,11 +168,22 @@ async def get_passwords_db(config: Annotated[AppConfig, Depends(get_config)]) ->
     return db
 
 
+async def get_photos_db(config: Annotated[AppConfig, Depends(get_config)]) -> PhotosDB:
+    """Get a photos database connection."""
+
+    config.ensure_data_dir()
+    db = PhotosDB(config.general.data_dir / "photos.db")
+    await db.initialize()
+    return db
+
+
 # Type aliases for dependency injection
 ConfigDep = Annotated[AppConfig, Depends(get_config)]
 NotesSyncEngineDep = Annotated[NotesSyncEngine, Depends(get_notes_sync_engine)]
 RemindersSyncEngineDep = Annotated[RemindersSyncEngine, Depends(get_reminders_sync_engine)]
 PasswordsSyncEngineDep = Annotated[PasswordsSyncEngine, Depends(get_passwords_sync_engine)]
+PhotosSyncEngineDep = Annotated[PhotoSyncEngine, Depends(get_photos_sync_engine)]
 NotesDBDep = Annotated[NotesDB, Depends(get_notes_db)]
 RemindersDBDep = Annotated[RemindersDB, Depends(get_reminders_db)]
 PasswordsDBDep = Annotated[PasswordsDB, Depends(get_passwords_db)]
+PhotosDBDep = Annotated[PhotosDB, Depends(get_photos_db)]
