@@ -108,6 +108,7 @@ async def _run_passwords_sync(
     run_push: bool,
     run_pull: bool,
     log_sync_type: str | None,
+    bulk_push: bool,
 ):
     apple_csv_path: Path | None = None
     output_csv_path: Path | None = None
@@ -143,6 +144,7 @@ async def _run_passwords_sync(
             simulate=simulate,
             run_push=run_push,
             run_pull=run_pull,
+            bulk_push=bulk_push,
         )
 
         result, keep_output_file = await _attach_download_metadata(result)
@@ -352,6 +354,7 @@ async def sync_passwords(
     engine: PasswordsSyncEngineDep = None,
     config: ConfigDep = None,
     simulate: bool = False,
+    bulk: bool = True,
 ):
     """Full auto-sync: Apple ↔ VaultWarden (push & pull)."""
 
@@ -363,6 +366,7 @@ async def sync_passwords(
         run_push=True,
         run_pull=True,
         log_sync_type="manual",
+        bulk_push=bulk,
     )
     return result
 
@@ -373,6 +377,7 @@ async def export_passwords(
     engine: PasswordsSyncEngineDep = None,
     config: ConfigDep = None,
     simulate: bool = False,
+    bulk: bool = True,
 ):
     """Push Apple Passwords CSV changes to VaultWarden only."""
 
@@ -384,6 +389,7 @@ async def export_passwords(
         run_push=True,
         run_pull=False,
         log_sync_type=None,
+        bulk_push=bulk,
     )
 
 
@@ -403,6 +409,7 @@ async def import_passwords(
         run_push=False,
         run_pull=True,
         log_sync_type=None,
+        bulk_push=True,
     )
 
 

@@ -288,6 +288,7 @@ class VaultwardenAPIClient:
         entries: list[PasswordEntry],
         folder_mapping: dict[str, str] | None = None,
         dry_run: bool = False,
+        use_bulk: bool = False,
     ) -> dict[str, Any]:
         """
         Push password entries to VaultWarden using Bitwarden Ciphers API.
@@ -325,6 +326,8 @@ class VaultwardenAPIClient:
         # Get existing ciphers for comparison
         existing_entries = await self.pull_passwords()
         existing_map = {e.get_dedup_key(): e for e in existing_entries}
+        user_key = await self._ensure_user_key()
+        payload_queue: list[tuple[PasswordEntry, dict[str, Any]]] = []
 
         # TODO: We'd need to also fetch cipher IDs from sync API to update
         # For now, we'll only create new entries
@@ -348,15 +351,42 @@ class VaultwardenAPIClient:
                     continue
 
                 if create_entry:
-                    await self._create_cipher(entry, folder_mapping)
-                    stats["created"] += 1
-                    logger.debug(f"Created: {entry.title}")
+                    payload = self._build_cipher_payload(
+                        entry, folder_mapping, user_key, include_folder_id=not use_bulk
+                    )
+                    payload_queue.append((entry, payload))
                 else:
                     stats["skipped"] += 1
                     logger.debug(f"Skipped (update not implemented): {entry.title}")
 
             except Exception as e:
                 error_msg = f"Failed to push {entry.title}: {e}"
+                logger.error(error_msg)
+                stats["failed"] += 1
+                stats["errors"].append(error_msg)
+
+        if dry_run:
+            stats["created"] += len(payload_queue)
+            return stats
+
+        if use_bulk and payload_queue:
+            try:
+                await self._bulk_create_ciphers(payload_queue, folder_mapping, user_key)
+                stats["created"] += len(payload_queue)
+            except Exception as exc:
+                logger.error("Bulk cipher import failed: %s", exc)
+                stats["failed"] += len(payload_queue)
+                stats["errors"].append(str(exc))
+            return stats
+
+        # Fallback to per-item creation
+        for entry, payload in payload_queue:
+            try:
+                await self._post_cipher_payload(payload)
+                stats["created"] += 1
+                logger.debug(f"Created: {entry.title}")
+            except Exception as exc:
+                error_msg = f"Failed to push {entry.title}: {exc}"
                 logger.error(error_msg)
                 stats["failed"] += 1
                 stats["errors"].append(error_msg)
@@ -443,46 +473,89 @@ class VaultwardenAPIClient:
         """
         # Determine folder ID
         user_key = await self._ensure_user_key()
+        user_key = await self._ensure_user_key()
+        payload = self._build_cipher_payload(entry, folder_mapping, user_key, include_folder_id=True)
+        await self._post_cipher_payload(payload)
+
+    def _build_cipher_payload(
+        self,
+        entry: PasswordEntry,
+        folder_mapping: dict[str, str] | None,
+        user_key: bytes,
+        *,
+        include_folder_id: bool,
+    ) -> dict[str, Any]:
         folder_id = None
-        if entry.folder and folder_mapping:
+        if include_folder_id and entry.folder and folder_mapping:
             folder_id = folder_mapping.get(entry.folder)
 
-        # Build cipher payload (Bitwarden cipher format)
-        cipher_data = {
-            "type": 1,  # Login type
+        cipher_data: dict[str, Any] = {
+            "type": 1,
             "name": encrypt_string(entry.title, user_key),
-            "notes": encrypt_string(entry.notes, user_key) if entry.notes else None,
             "favorite": False,
             "folderId": folder_id,
-            "login": {
-                "username": encrypt_string(entry.username, user_key) if entry.username else None,
-                "password": encrypt_string(entry.password, user_key) if entry.password else None,
-                "totp": encrypt_string(entry.otp_auth, user_key) if entry.otp_auth else None,
-            },
+            "login": {},
         }
 
-        # Add URLs if present
+        if entry.notes:
+            cipher_data["notes"] = encrypt_string(entry.notes, user_key)
+
+        if entry.username:
+            cipher_data["login"]["username"] = encrypt_string(entry.username, user_key)
+        if entry.password:
+            cipher_data["login"]["password"] = encrypt_string(entry.password, user_key)
+        if entry.otp_auth:
+            cipher_data["login"]["totp"] = encrypt_string(entry.otp_auth, user_key)
+
         urls = entry.get_all_urls()
         if urls:
-            cipher_data["login"]["uris"] = encrypt_optional_list(urls, user_key)
+            uris = encrypt_optional_list(urls, user_key)
+            if uris:
+                cipher_data["login"]["uris"] = uris
 
-        # Remove None values to keep payload tidy
-        if cipher_data["login"].get("uris") is None:
-            cipher_data["login"].pop("uris", None)
-        if cipher_data["login"].get("username") is None:
-            cipher_data["login"].pop("username", None)
-        if cipher_data["login"].get("password") is None:
-            cipher_data["login"].pop("password", None)
-        if cipher_data["login"].get("totp") is None:
-            cipher_data["login"].pop("totp", None)
+        return cipher_data
 
-        if cipher_data.get("notes") is None:
-            cipher_data.pop("notes", None)
-
-        # Create cipher via API
+    async def _post_cipher_payload(self, payload: dict[str, Any]) -> None:
         ciphers_url = f"{self.url}/api/ciphers"
         response = await self._client.post(
-            ciphers_url, headers=self._get_headers(), json=cipher_data
+            ciphers_url, headers=self._get_headers(), json=payload
+        )
+        response.raise_for_status()
+
+    async def _bulk_create_ciphers(
+        self,
+        payload_queue: list[tuple[PasswordEntry, dict[str, Any]]],
+        folder_mapping: dict[str, str] | None,
+        user_key: bytes,
+    ) -> None:
+        ciphers: list[dict[str, Any]] = []
+        folders_payload: list[dict[str, Any]] = []
+        folder_index_map: dict[str, int] = {}
+        relationships: list[list[int]] = []
+
+        for cipher_index, (entry, payload) in enumerate(payload_queue):
+            ciphers.append(payload)
+            folder_name = entry.folder
+            if folder_name and folder_mapping and folder_name in folder_mapping:
+                if folder_name not in folder_index_map:
+                    folder_id = folder_mapping[folder_name]
+                    folders_payload.append(
+                        {
+                            "id": folder_id,
+                            "name": encrypt_string(folder_name, user_key),
+                        }
+                    )
+                    folder_index_map[folder_name] = len(folders_payload) - 1
+                relationships.append([cipher_index, folder_index_map[folder_name]])
+
+        import_body = {
+            "ciphers": ciphers,
+            "folders": folders_payload,
+            "folderRelationships": relationships,
+        }
+        import_url = f"{self.url}/api/ciphers/import"
+        response = await self._client.post(
+            import_url, headers=self._get_headers(), json=import_body
         )
         response.raise_for_status()
 

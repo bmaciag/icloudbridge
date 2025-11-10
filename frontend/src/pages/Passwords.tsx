@@ -180,7 +180,10 @@ export default function Passwords() {
       setBidirectionalLoading(true);
       setError(null);
       setSuccess(null);
-      const response = await apiClient.passwordsBidirectionalSync(bidirectionalFile, { simulate });
+      const response = await apiClient.passwordsBidirectionalSync(bidirectionalFile, {
+        simulate,
+        bulk: true,
+      });
       setBidirectionalResult(response);
       if (simulate) {
         setSuccess('Simulation complete. No changes were applied.');
@@ -204,7 +207,7 @@ export default function Passwords() {
       setExportLoading(true);
       setError(null);
       setSuccess(null);
-      const response = await apiClient.passwordsExportToVaultwarden(exportFile);
+      const response = await apiClient.passwordsExportToVaultwarden(exportFile, { bulk: true });
       setExportResult(response);
       setSuccess('Export to VaultWarden complete.');
     } catch (err) {
@@ -219,7 +222,7 @@ export default function Passwords() {
       setImportLoading(true);
       setError(null);
       setSuccess(null);
-      const response = await apiClient.passwordsImportFromVaultwarden();
+      const response = await apiClient.passwordsImportFromVaultwarden({ bulk: true });
       setImportResult(response);
       if (response.stats.pull?.new_entries) {
         setSuccess('Import prepared. Download the Apple CSV and import it.');

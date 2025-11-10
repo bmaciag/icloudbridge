@@ -412,6 +412,7 @@ class PasswordsSyncEngine:
         simulate: bool = False,
         run_push: bool = True,
         run_pull: bool = True,
+        bulk_push: bool = False,
     ) -> dict:
         """Run push and/or pull phases with optional simulation."""
 
@@ -436,6 +437,7 @@ class PasswordsSyncEngine:
                 apple_csv_path=apple_csv_path,
                 vaultwarden_client=vaultwarden_client,
                 simulate=simulate,
+                bulk_push=bulk_push,
             )
 
         if run_pull:
@@ -463,6 +465,7 @@ class PasswordsSyncEngine:
         apple_csv_path: Path,
         vaultwarden_client: "VaultwardenAPIClient",
         simulate: bool,
+        bulk_push: bool,
     ) -> dict:
         logger.info("Running push phase (simulate=%s)", simulate)
         import_stats = await self.import_apple_csv(apple_csv_path)
@@ -494,6 +497,7 @@ class PasswordsSyncEngine:
             entries_to_push,
             folder_mapping=folder_mapping,
             dry_run=simulate,
+            use_bulk=bulk_push,
         )
 
         return {

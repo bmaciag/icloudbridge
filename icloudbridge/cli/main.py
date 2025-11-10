@@ -1597,6 +1597,7 @@ def passwords_sync(
     ctx: typer.Context,
     apple_csv: Path = typer.Option(..., help="Apple Passwords CSV export"),
     output: Path | None = typer.Option(None, "-o", "--output", help="Output path for Apple CSV (default: data_dir/apple-import.csv)"),
+    bulk: bool = typer.Option(False, "--bulk", help="Use Bitwarden bulk import endpoint for push phase"),
 ) -> None:
     """Full auto-sync: Apple → VaultWarden (push) and VaultWarden → Apple (pull)."""
     import asyncio
@@ -1668,6 +1669,7 @@ def passwords_sync(
             simulate=False,
             run_push=True,
             run_pull=True,
+            bulk_push=bulk,
         )
 
     try:
