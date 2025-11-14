@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { CheckCircle, ArrowRight, ArrowLeft, Loader2, FileText, Calendar, Key, Download, Shield, AlertTriangle, ExternalLink, Image as ImageIcon } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
@@ -17,8 +17,32 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
 import { FolderBrowserDialog } from '@/components/FolderBrowserDialog';
 import { useAppStore } from '@/store/app-store';
+import { useSyncStore } from '@/store/sync-store';
 import apiClient from '@/lib/api-client';
 import type { AppConfig, ConnectionTestResponse, SetupVerificationResponse } from '@/types/api';
+
+const ANALYZE_REGEX = /Analyzing file (\d+) of (\d+)/i;
+const FOUND_REGEX = /Found (\d+) files/i;
+const COMPLETE_REGEX = /Initial scan complete - (\d+) files discovered/i;
+
+const extractScanStats = (message?: string): { processed: number; total: number } | null => {
+  if (!message) return null;
+  const analyzing = message.match(ANALYZE_REGEX);
+  if (analyzing) {
+    return { processed: parseInt(analyzing[1], 10), total: parseInt(analyzing[2], 10) };
+  }
+  const found = message.match(FOUND_REGEX);
+  if (found) {
+    const total = parseInt(found[1], 10);
+    return { processed: 0, total };
+  }
+  const complete = message.match(COMPLETE_REGEX);
+  if (complete) {
+    const total = parseInt(complete[1], 10);
+    return { processed: total, total };
+  }
+  return null;
+};
 
 const STEPS = [
   { id: 'welcome', title: 'Welcome', description: 'Get started with iCloudBridge' },
@@ -28,6 +52,7 @@ const STEPS = [
   { id: 'passwords', title: 'Passwords', description: 'Password sync settings' },
   { id: 'photos', title: 'Photos', description: 'Photo sync settings' },
   { id: 'test', title: 'Test', description: 'Test your configuration' },
+  { id: 'photos-scan', title: 'Initial Photo Scan', description: 'Index your photo library' },
   { id: 'complete', title: 'Complete', description: 'Ready to sync!' },
 ];
 
@@ -35,6 +60,7 @@ type PasswordProvider = 'vaultwarden' | 'nextcloud';
 
 export default function FirstRunWizard() {
   const { isFirstRun, setIsFirstRun, setWizardCompleted, setConfig } = useAppStore();
+  const { activeSyncs } = useSyncStore();
   const [currentStep, setCurrentStep] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +69,14 @@ export default function FirstRunWizard() {
   const [verifying, setVerifying] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const [showPhotosFolderBrowser, setShowPhotosFolderBrowser] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
+  const [initialScanStarted, setInitialScanStarted] = useState(false);
+  const [initialScanComplete, setInitialScanComplete] = useState(false);
+  const [initialScanProgress, setInitialScanProgress] = useState(0);
+  const [initialScanMessage, setInitialScanMessage] = useState('Waiting to start...');
+  const [initialScanStats, setInitialScanStats] = useState<{ processed: number; total: number } | null>(null);
+  const [initialScanError, setInitialScanError] = useState<string | null>(null);
+  const [scanConfigSignature, setScanConfigSignature] = useState<string | null>(null);
 
   // Form data
   const [formData, setFormData] = useState<Partial<AppConfig>>({
@@ -77,7 +111,103 @@ export default function FirstRunWizard() {
   });
 
   const passwordProvider: PasswordProvider = (formData.passwords_provider as PasswordProvider) ?? 'vaultwarden';
+  const needsConnectionTest = useMemo(
+    () => Boolean(formData.reminders_enabled || formData.passwords_enabled),
+    [formData.reminders_enabled, formData.passwords_enabled]
+  );
+  const requiresPhotoScan = useMemo(() => Boolean(formData.photos_enabled), [formData.photos_enabled]);
+  const photoConfigSignature = useMemo(
+    () =>
+      JSON.stringify({
+        enabled: formData.photos_enabled ?? false,
+        sources: formData.photo_sources,
+        album: formData.photos_default_album,
+      }),
+    [formData.photos_enabled, formData.photo_sources, formData.photos_default_album]
+  );
+  const currentStepId = STEPS[currentStep].id;
 
+  const buildConfigPayload = useCallback((): Partial<AppConfig> => {
+    const configUpdate: Partial<AppConfig> = {
+      notes_enabled: formData.notes_enabled ?? false,
+      notes_remote_folder: formData.notes_remote_folder,
+      data_dir: formData.data_dir,
+    };
+
+    if (formData.reminders_enabled) {
+      configUpdate.reminders_enabled = true;
+      configUpdate.reminders_caldav_url = formData.reminders_caldav_url;
+      configUpdate.reminders_caldav_username = formData.reminders_caldav_username;
+      configUpdate.reminders_caldav_password = formData.reminders_caldav_password;
+      configUpdate.reminders_use_nextcloud = formData.reminders_use_nextcloud;
+      configUpdate.reminders_nextcloud_url = formData.reminders_nextcloud_url;
+    } else {
+      configUpdate.reminders_enabled = false;
+    }
+
+    if (formData.passwords_enabled) {
+      configUpdate.passwords_enabled = true;
+      configUpdate.passwords_provider = passwordProvider;
+      if (passwordProvider === 'nextcloud') {
+        configUpdate.passwords_nextcloud_url = formData.passwords_nextcloud_url;
+        configUpdate.passwords_nextcloud_username = formData.passwords_nextcloud_username;
+        configUpdate.passwords_nextcloud_app_password = formData.passwords_nextcloud_app_password;
+      } else {
+        configUpdate.passwords_vaultwarden_url = formData.passwords_vaultwarden_url;
+        configUpdate.passwords_vaultwarden_email = formData.passwords_vaultwarden_email;
+        configUpdate.passwords_vaultwarden_password = formData.passwords_vaultwarden_password;
+      }
+    } else {
+      configUpdate.passwords_enabled = false;
+    }
+
+    if (formData.photos_enabled) {
+      configUpdate.photos_enabled = true;
+      configUpdate.photos_default_album = formData.photos_default_album;
+      configUpdate.photo_sources = formData.photo_sources;
+    } else {
+      configUpdate.photos_enabled = false;
+    }
+
+    return configUpdate;
+  }, [formData, passwordProvider]);
+
+  const startInitialScan = useCallback(async () => {
+    if (!requiresPhotoScan) {
+      return;
+    }
+
+    try {
+      setInitialScanError(null);
+      setInitialScanStarted(true);
+      setInitialScanComplete(false);
+      setInitialScanProgress(5);
+      setInitialScanMessage('Saving configuration...');
+      setInitialScanStats(null);
+
+      const configUpdate = buildConfigPayload();
+      const updated = await apiClient.updateConfig(configUpdate);
+      setConfig(updated);
+
+      setInitialScanProgress(10);
+      setInitialScanMessage('Starting initial scan...');
+
+      const response = await apiClient.syncPhotos(undefined, false, true);
+      const stats = response?.stats ?? {};
+      const discovered = typeof stats.discovered === 'number' ? stats.discovered : undefined;
+      if (typeof discovered === 'number') {
+        setInitialScanStats({ processed: discovered, total: discovered });
+      }
+      setInitialScanComplete(true);
+      setInitialScanProgress(100);
+      setInitialScanMessage('Initial scan complete');
+      setScanConfigSignature(photoConfigSignature);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Initial scan failed';
+      setInitialScanError(message);
+      setInitialScanStarted(false);
+    }
+  }, [buildConfigPayload, requiresPhotoScan, setConfig, photoConfigSignature]);
   // Trigger confetti when reaching the complete step
   useEffect(() => {
     if (currentStep === STEPS.length - 1) {
@@ -116,11 +246,78 @@ export default function FirstRunWizard() {
 
   // Verify setup when on Notes step
   useEffect(() => {
-    const notesStepIndex = STEPS.findIndex(s => s.id === 'notes');
-    if (currentStep === notesStepIndex && formData.notes_enabled) {
+    if (currentStepId === 'notes' && formData.notes_enabled) {
       loadVerification();
     }
-  }, [currentStep, formData.notes_enabled]);
+  }, [currentStepId, formData.notes_enabled]);
+
+  useEffect(() => {
+    if (currentStepId === 'test' && !needsConnectionTest) {
+      setCurrentStep((prev) => Math.min(prev + 1, STEPS.length - 1));
+      setError(null);
+      setTestResult(null);
+    }
+  }, [currentStepId, needsConnectionTest]);
+
+  useEffect(() => {
+    if (currentStepId !== 'photos-scan') {
+      return;
+    }
+
+    if (!requiresPhotoScan) {
+      setCurrentStep((prev) => Math.min(prev + 1, STEPS.length - 1));
+      return;
+    }
+
+    if (!initialScanStarted && !initialScanComplete && !initialScanError) {
+      void startInitialScan();
+    }
+  }, [
+    currentStepId,
+    requiresPhotoScan,
+    initialScanStarted,
+    initialScanComplete,
+    initialScanError,
+    startInitialScan,
+  ]);
+
+  useEffect(() => {
+    if (!requiresPhotoScan) {
+      return;
+    }
+    const photoSync = activeSyncs.get('photos');
+    if (photoSync) {
+      setInitialScanProgress(photoSync.progress ?? 0);
+      setInitialScanMessage(photoSync.message || 'Scanning...');
+      const stats = extractScanStats(photoSync.message);
+      if (stats) {
+        setInitialScanStats(stats);
+      }
+    }
+  }, [activeSyncs, requiresPhotoScan]);
+
+  useEffect(() => {
+    if (!requiresPhotoScan) {
+      setInitialScanStarted(false);
+      setInitialScanComplete(false);
+      setInitialScanProgress(0);
+      setInitialScanStats(null);
+      setInitialScanMessage('Waiting to start...');
+      setInitialScanError(null);
+      setScanConfigSignature(null);
+      return;
+    }
+
+    if (scanConfigSignature && photoConfigSignature !== scanConfigSignature) {
+      setInitialScanStarted(false);
+      setInitialScanComplete(false);
+      setInitialScanProgress(0);
+      setInitialScanStats(null);
+      setInitialScanMessage('Waiting to start...');
+      setInitialScanError(null);
+      setScanConfigSignature(null);
+    }
+  }, [requiresPhotoScan, photoConfigSignature, scanConfigSignature]);
 
   const loadVerification = async () => {
     try {
@@ -151,52 +348,11 @@ export default function FirstRunWizard() {
   const handleTestConnection = async () => {
     try {
       setLoading(true);
+      setLoadingMessage('Testing connection...');
       setError(null);
       setTestResult(null);
 
-      // Build config update with only enabled services' credentials
-      const configUpdate: Partial<AppConfig> = {
-        notes_enabled: formData.notes_enabled,
-        notes_remote_folder: formData.notes_remote_folder,
-        data_dir: formData.data_dir,
-      };
-
-      // Only include reminders config if enabled
-      if (formData.reminders_enabled) {
-        configUpdate.reminders_enabled = true;
-        configUpdate.reminders_caldav_url = formData.reminders_caldav_url;
-        configUpdate.reminders_caldav_username = formData.reminders_caldav_username;
-        configUpdate.reminders_caldav_password = formData.reminders_caldav_password;
-        configUpdate.reminders_use_nextcloud = formData.reminders_use_nextcloud;
-        configUpdate.reminders_nextcloud_url = formData.reminders_nextcloud_url;
-      } else {
-        configUpdate.reminders_enabled = false;
-      }
-
-      // Only include passwords config if enabled
-      if (formData.passwords_enabled) {
-        configUpdate.passwords_enabled = true;
-        configUpdate.passwords_provider = passwordProvider;
-        if (passwordProvider === 'nextcloud') {
-          configUpdate.passwords_nextcloud_url = formData.passwords_nextcloud_url;
-          configUpdate.passwords_nextcloud_username = formData.passwords_nextcloud_username;
-          configUpdate.passwords_nextcloud_app_password = formData.passwords_nextcloud_app_password;
-        } else {
-          configUpdate.passwords_vaultwarden_url = formData.passwords_vaultwarden_url;
-          configUpdate.passwords_vaultwarden_email = formData.passwords_vaultwarden_email;
-          configUpdate.passwords_vaultwarden_password = formData.passwords_vaultwarden_password;
-        }
-      } else {
-        configUpdate.passwords_enabled = false;
-      }
-
-      if (formData.photos_enabled) {
-        configUpdate.photos_enabled = true;
-        configUpdate.photos_default_album = formData.photos_default_album;
-        configUpdate.photo_sources = formData.photo_sources;
-      } else {
-        configUpdate.photos_enabled = false;
-      }
+      const configUpdate = buildConfigPayload();
 
       // Save credentials for enabled services
       console.log('Sending config update:', JSON.stringify(configUpdate, null, 2));
@@ -249,57 +405,17 @@ export default function FirstRunWizard() {
       setTestResult({ success: false, message: errorMessage });
     } finally {
       setLoading(false);
+      setLoadingMessage(null);
     }
   };
 
   const handleComplete = async () => {
     try {
       setLoading(true);
+      setLoadingMessage('Saving configuration...');
       setError(null);
 
-      // Build config update with only enabled services' credentials
-      const configUpdate: Partial<AppConfig> = {
-        notes_enabled: formData.notes_enabled,
-        notes_remote_folder: formData.notes_remote_folder,
-        data_dir: formData.data_dir,
-      };
-
-      // Only include reminders config if enabled
-      if (formData.reminders_enabled) {
-        configUpdate.reminders_enabled = true;
-        configUpdate.reminders_caldav_url = formData.reminders_caldav_url;
-        configUpdate.reminders_caldav_username = formData.reminders_caldav_username;
-        configUpdate.reminders_caldav_password = formData.reminders_caldav_password;
-        configUpdate.reminders_use_nextcloud = formData.reminders_use_nextcloud;
-        configUpdate.reminders_nextcloud_url = formData.reminders_nextcloud_url;
-      } else {
-        configUpdate.reminders_enabled = false;
-      }
-
-      // Only include passwords config if enabled
-      if (formData.passwords_enabled) {
-        configUpdate.passwords_enabled = true;
-        configUpdate.passwords_provider = passwordProvider;
-        if (passwordProvider === 'nextcloud') {
-          configUpdate.passwords_nextcloud_url = formData.passwords_nextcloud_url;
-          configUpdate.passwords_nextcloud_username = formData.passwords_nextcloud_username;
-          configUpdate.passwords_nextcloud_app_password = formData.passwords_nextcloud_app_password;
-        } else {
-          configUpdate.passwords_vaultwarden_url = formData.passwords_vaultwarden_url;
-          configUpdate.passwords_vaultwarden_email = formData.passwords_vaultwarden_email;
-          configUpdate.passwords_vaultwarden_password = formData.passwords_vaultwarden_password;
-        }
-      } else {
-        configUpdate.passwords_enabled = false;
-      }
-
-      if (formData.photos_enabled) {
-        configUpdate.photos_enabled = true;
-        configUpdate.photos_default_album = formData.photos_default_album;
-        configUpdate.photo_sources = formData.photo_sources;
-      } else {
-        configUpdate.photos_enabled = false;
-      }
+      const configUpdate = buildConfigPayload();
 
       // Save configuration - backend will automatically store passwords in keyring
       console.log('Saving configuration...');
@@ -323,8 +439,28 @@ export default function FirstRunWizard() {
       }
     } finally {
       setLoading(false);
+      setLoadingMessage(null);
     }
   };
+
+  const processedCount = initialScanStats?.processed ?? null;
+  const totalCount = initialScanStats?.total ?? null;
+  const remainingCount =
+    processedCount !== null && totalCount !== null ? Math.max(totalCount - processedCount, 0) : null;
+  const isLastStep = currentStepId === 'complete';
+  const isTestStepActive = currentStepId === 'test' && needsConnectionTest;
+  const isPhotoScanStep = currentStepId === 'photos-scan' && requiresPhotoScan;
+  const nextButtonDisabled =
+    loading || (isPhotoScanStep && (!initialScanComplete || !!initialScanError));
+  const backButtonDisabled =
+    currentStep === 0 || loading || (isPhotoScanStep && initialScanStarted && !initialScanComplete);
+  const nextButtonLabel = isTestStepActive
+    ? 'Test Connection'
+    : isPhotoScanStep
+      ? initialScanComplete
+        ? 'Continue'
+        : 'Scanning...'
+      : 'Next';
 
   const renderStepContent = () => {
     switch (STEPS[currentStep].id) {
@@ -461,7 +597,7 @@ export default function FirstRunWizard() {
                   </p>
                 </div>
                 <Switch
-                  checked={formData.notes_enabled}
+                  checked={formData.notes_enabled ?? false}
                   onCheckedChange={(checked) =>
                     setFormData({ ...formData, notes_enabled: checked })
                   }
@@ -1014,15 +1150,24 @@ export default function FirstRunWizard() {
 
       case 'test': {
         // Determine what services need testing
-        const needsTest = formData.reminders_enabled || formData.passwords_enabled;
+        const needsTest = needsConnectionTest;
         let testService = '';
-      if (formData.reminders_enabled && formData.passwords_enabled) {
-        testService = `CalDAV (Reminders) and ${passwordProvider === 'nextcloud' ? 'Nextcloud Passwords' : 'VaultWarden (Passwords)'}`;
-      } else if (formData.reminders_enabled) {
-        testService = 'CalDAV (Reminders)';
-      } else if (formData.passwords_enabled) {
-        testService = passwordProvider === 'nextcloud' ? 'Nextcloud Passwords' : 'VaultWarden (Passwords)';
-      }
+        if (formData.reminders_enabled && formData.passwords_enabled) {
+          testService = `CalDAV (Reminders) and ${
+            passwordProvider === 'nextcloud' ? 'Nextcloud Passwords' : 'VaultWarden (Passwords)'
+          }`;
+        } else if (formData.reminders_enabled) {
+          testService = 'CalDAV (Reminders)';
+        } else if (formData.passwords_enabled) {
+          testService =
+            passwordProvider === 'nextcloud' ? 'Nextcloud Passwords' : 'VaultWarden (Passwords)';
+        }
+
+        const noTestServices = [];
+        if (formData.notes_enabled) noTestServices.push('Notes');
+        if (formData.photos_enabled) noTestServices.push('Photos');
+        const noTestLabel =
+          noTestServices.length > 0 ? noTestServices.join(' & ') : 'Selected services';
 
         return (
           <div className="space-y-4 py-4">
@@ -1049,14 +1194,18 @@ export default function FirstRunWizard() {
             ) : (
               <>
                 <div>
-                  <h3 className="text-lg font-semibold mb-2">Notes Configuration</h3>
+                  <h3 className="text-lg font-semibold mb-2">
+                    {noTestLabel} Configuration
+                  </h3>
                   <p className="text-sm text-muted-foreground">
-                    Your Notes sync is configured and ready
+                    {noTestLabel} {noTestServices.length > 1 ? 'are' : 'is'} configured and ready.
                   </p>
                 </div>
                 <Alert>
                   <AlertDescription>
-                    Notes sync uses AppleScript to access your local Notes.app - no connection test needed.
+                    {noTestServices.length > 0
+                      ? `${noTestLabel} ${noTestServices.length > 1 ? 'do' : 'does'} not require a connection test.`
+                      : 'No connection test is required for the selected services.'}
                     You can proceed to complete the setup.
                   </AlertDescription>
                 </Alert>
@@ -1096,6 +1245,78 @@ export default function FirstRunWizard() {
             {error && (
               <Alert variant="destructive">
                 <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+          </div>
+        );
+      }
+
+      case 'photos-scan': {
+        if (!requiresPhotoScan) {
+          return null;
+        }
+
+        return (
+          <div className="space-y-4 py-4">
+            <div className="flex items-center gap-3">
+              <ImageIcon className="w-8 h-8 text-primary" />
+              <div>
+                <h3 className="text-lg font-semibold">Initial Photo Scan</h3>
+                <p className="text-sm text-muted-foreground">
+                  We're indexing your photo sources so future imports are fast.
+                </p>
+              </div>
+            </div>
+
+            <Alert>
+              <AlertDescription>
+                Keep this window open while we scan. This only runs once unless you change your photo settings.
+              </AlertDescription>
+            </Alert>
+
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">{initialScanMessage}</span>
+                <span className="font-medium">{initialScanProgress}%</span>
+              </div>
+              <Progress value={initialScanProgress} />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="border rounded-lg p-3">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">Scanned</p>
+                <p className="text-lg font-semibold">
+                  {processedCount !== null ? processedCount : 'Calculating...'}
+                </p>
+              </div>
+              <div className="border rounded-lg p-3">
+                <p className="text-xs text-muted-foreground uppercase tracking-wide">Remaining</p>
+                <p className="text-lg font-semibold">
+                  {remainingCount !== null
+                    ? remainingCount
+                    : totalCount !== null
+                      ? Math.max(totalCount - (processedCount ?? 0), 0)
+                      : 'Calculating...'}
+                </p>
+              </div>
+            </div>
+
+            {initialScanError && (
+              <Alert variant="destructive">
+                <AlertDescription className="space-y-3">
+                  <p>{initialScanError}</p>
+                  <Button variant="outline" size="sm" onClick={() => startInitialScan()}>
+                    Retry scan
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {initialScanComplete && (
+              <Alert variant="success">
+                <AlertDescription>
+                  Initial photo scan complete. You can continue to finish setup.
+                </AlertDescription>
               </Alert>
             )}
           </div>
@@ -1178,33 +1399,28 @@ export default function FirstRunWizard() {
             <Button
               variant="outline"
               onClick={handleBack}
-              disabled={currentStep === 0 || loading}
+              disabled={backButtonDisabled}
             >
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
             </Button>
 
-            {currentStep < STEPS.length - 1 ? (
+            {!isLastStep ? (
               <Button
-                onClick={
-                  currentStep === STEPS.length - 2 ? handleTestConnection : handleNext
-                }
-                disabled={
-                  loading ||
-                  (currentStep === STEPS.length - 2 && !testResult?.success)
-                }
+                onClick={isTestStepActive ? handleTestConnection : handleNext}
+                disabled={nextButtonDisabled}
               >
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Testing...
+                    {loadingMessage || 'Processing...'}
                   </>
-                ) : currentStep === STEPS.length - 2 ? (
-                  'Test Connection'
                 ) : (
                   <>
-                    Next
-                    <ArrowRight className="w-4 h-4 ml-2" />
+                    {nextButtonLabel}
+                    {!isTestStepActive && !isPhotoScanStep && (
+                      <ArrowRight className="w-4 h-4 ml-2" />
+                    )}
                   </>
                 )}
               </Button>
@@ -1213,7 +1429,7 @@ export default function FirstRunWizard() {
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Saving...
+                    {loadingMessage || 'Processing...'}
                   </>
                 ) : (
                   'Get Started'

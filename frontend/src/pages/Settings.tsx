@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Settings as SettingsIcon, RefreshCw, Save, Trash2, FileText, Calendar, Key, Image, Download, Shield, AlertTriangle, ExternalLink, CheckCircle, Loader2, Database } from 'lucide-react';
-import { useBeforeUnload, useBlocker } from 'react-router-dom';
+import { useBeforeUnload, useBlocker, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -61,6 +61,7 @@ const sanitizeConfigSnapshot = (value: unknown): unknown => sortObject(stripTran
 export default function Settings() {
   const { config, setConfig, setIsFirstRun, resetWizard } = useAppStore();
   const { activeSyncs } = useSyncStore();
+  const navigate = useNavigate();
   const [formData, setFormData] = useState<Partial<AppConfig>>({});
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState<string | null>(null);
@@ -303,10 +304,43 @@ export default function Settings() {
 
       // Reset wizard state in Zustand
       resetWizard();
-      setIsFirstRun(true);
 
-      // Reload the page to show the wizard
-      window.location.reload();
+      // Ensure UI reflects a fully disabled configuration before routing
+      const blankConfig: AppConfig =
+        config
+          ? {
+              ...config,
+              notes_enabled: false,
+              reminders_enabled: false,
+              passwords_enabled: false,
+              photos_enabled: false,
+            }
+          : {
+              data_dir: '',
+              notes_enabled: false,
+              reminders_enabled: false,
+              passwords_enabled: false,
+              photos_enabled: false,
+            } as AppConfig;
+      setConfig(blankConfig);
+      setFormData({
+        ...blankConfig,
+        passwords_provider: (blankConfig.passwords_provider as PasswordProvider) ?? 'vaultwarden',
+        passwords_vaultwarden_password: '',
+        passwords_nextcloud_app_password: '',
+      });
+
+      // Temporarily hide wizard until we route back to the dashboard
+      setIsFirstRun(false);
+
+      // Navigate to dashboard so the user sees the base UI before the wizard
+      navigate('/', { replace: true });
+
+      // Re-enable wizard after navigation so it opens on the dashboard
+      setTimeout(() => {
+        setIsFirstRun(true);
+        setLoading(false);
+      }, 100);
     } catch (err) {
       setError(formatError(err, 'Failed to reset configuration'));
       setLoading(false);

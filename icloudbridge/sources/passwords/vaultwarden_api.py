@@ -236,6 +236,11 @@ class VaultwardenAPIClient:
                 if cipher.get("type") != 1:
                     continue
 
+                # Skip anything that's in the trash/bin
+                if cipher.get("deletedDate") or cipher.get("trashed") or cipher.get("isDeleted"):
+                    logger.debug("Skipping deleted VaultWarden entry: %s", cipher.get("name"))
+                    continue
+
                 login_data = cipher.get("login", {})
                 folder_id = cipher.get("folderId")
 

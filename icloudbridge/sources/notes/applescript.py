@@ -471,9 +471,9 @@ class NotesAdapter:
             RuntimeError: If Notes cannot be launched
         """
         if not await self.is_notes_running():
-            logger.info("Launching Apple Notes.app...")
+            logger.info("Launching Apple Notes.app in background...")
             try:
-                await self._run_applescript('tell application "Notes" to activate')
+                await self._run_applescript('tell application "Notes" to launch')
                 # Give it a moment to launch
                 await asyncio.sleep(1)
             except Exception as e:

@@ -112,9 +112,9 @@ class VaultwardenProvider(PasswordProviderBase):
 
         # Use push_passwords with a single entry
         await self.client.push_passwords(
-            passwords=[entry],
+            entries=[entry],
             dry_run=False,
-            use_bulk_import=False,
+            use_bulk=False,
         )
         return ""
 
@@ -222,9 +222,9 @@ class VaultwardenProvider(PasswordProviderBase):
         # Use Vaultwarden bulk import
         try:
             await self.client.push_passwords(
-                passwords=entries,
+                entries=entries,
                 dry_run=False,
-                use_bulk_import=True,
+                use_bulk=True,
             )
             return {"created": len(entries), "failed": 0}
         except Exception as e:
