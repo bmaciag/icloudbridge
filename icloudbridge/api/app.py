@@ -11,13 +11,13 @@ This module provides the main FastAPI application with:
 
 import asyncio
 import logging
+import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from icloudbridge.api.exceptions import (
@@ -37,6 +37,21 @@ logger = logging.getLogger(__name__)
 
 # Scheduler will be initialized in lifespan
 scheduler = None
+
+
+def _resolve_frontend_path() -> Path | None:
+    """Locate the built frontend bundle if present."""
+    override = os.environ.get("ICLOUDBRIDGE_FRONTEND_DIST")
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override).expanduser())
+    default_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    candidates.append(default_dist)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 @asynccontextmanager
@@ -149,22 +164,25 @@ def create_app() -> FastAPI:
     from icloudbridge.api.websocket import websocket_endpoint
     app.add_api_websocket_route("/api/ws", websocket_endpoint)
 
-    # Serve static files (frontend build) - will be added in Phase 2
-    # frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
-    # if frontend_dist.exists():
-    #     app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
-    #     logger.info(f"Serving frontend from {frontend_dist}")
-
-    # Root endpoint
-    @app.get("/")
-    async def root():
-        """Root endpoint - returns API information."""
-        return {
-            "name": "iCloudBridge API",
-            "version": "0.1.0",
-            "docs": "/api/docs",
-            "health": "/api/health",
-        }
+    frontend_path = _resolve_frontend_path()
+    if frontend_path:
+        app.mount(
+            "/",
+            StaticFiles(directory=str(frontend_path), html=True),
+            name="frontend",
+        )
+        logger.info("Serving frontend assets from %s", frontend_path)
+    else:
+        # Root endpoint only when we are not serving static frontend files
+        @app.get("/")
+        async def root():
+            """Root endpoint - returns API information."""
+            return {
+                "name": "iCloudBridge API",
+                "version": "0.1.0",
+                "docs": "/api/docs",
+                "health": "/api/health",
+            }
 
     logger.info("FastAPI application created")
     return app

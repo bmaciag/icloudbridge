@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import logging.handlers
+import os
+import subprocess
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from icloudbridge.core.config import AppConfig
 
@@ -74,8 +76,20 @@ def build_console_handler(level_name: str) -> logging.Handler:
     return handler
 
 
-def build_file_handler(config: AppConfig) -> logging.Handler:
-    log_dir = config.general.data_dir / "logs"
+def _resolve_log_dir(config: AppConfig, override: Path | None = None) -> Path:
+    """Determine where log files should live."""
+    if override:
+        return override.expanduser().resolve()
+
+    env_override = os.environ.get("ICLOUDBRIDGE_LOG_ROOT")
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+
+    return config.general.data_dir / "logs"
+
+
+def build_file_handler(config: AppConfig, *, log_directory: Path | None = None) -> logging.Handler:
+    log_dir = _resolve_log_dir(config, log_directory)
     log_dir.mkdir(parents=True, exist_ok=True)
     file_path = log_dir / config.general.log_file_name
     handler = logging.handlers.RotatingFileHandler(
@@ -94,7 +108,12 @@ def build_file_handler(config: AppConfig) -> logging.Handler:
     return handler
 
 
-def setup_logging(config: AppConfig, *, level_name: str | None = None) -> Path:
+def setup_logging(
+    config: AppConfig,
+    *,
+    level_name: str | None = None,
+    log_directory: Path | None = None,
+) -> Path:
     """Configure root logging handlers.
 
     Returns the path to the primary log file for reference or tests.
@@ -116,7 +135,7 @@ def setup_logging(config: AppConfig, *, level_name: str | None = None) -> Path:
     console_handler.addFilter(filter_)
     root.addHandler(console_handler)
 
-    file_handler = build_file_handler(config)
+    file_handler = build_file_handler(config, log_directory=log_directory)
     file_handler.addFilter(filter_)
     root.addHandler(file_handler)
 
@@ -127,10 +146,17 @@ def setup_logging(config: AppConfig, *, level_name: str | None = None) -> Path:
         logging.getLogger(logger_name).handlers.clear()
         logging.getLogger(logger_name).propagate = True
 
-    return config.general.data_dir / "logs" / config.general.log_file_name
+    log_dir = _resolve_log_dir(config, log_directory)
+    return log_dir / config.general.log_file_name
 
 
-def log_subprocess_output(process: "subprocess.Popen[str]", logger: logging.Logger, *, category: str, level: str = "DEBUG") -> None:
+def log_subprocess_output(
+    process: subprocess.Popen[str],
+    logger: logging.Logger,
+    *,
+    category: str,
+    level: str = "DEBUG",
+) -> None:
     """Stream a subprocess' stdout/stderr into the logger."""
     levelno, levelname = _parse_level(level)
     if process.stdout is None:

@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""
+Build the distributable macOS app bundle plus DMG.
+
+Steps:
+1. Ensure Poetry dependencies (main group) are installed.
+2. Build the frontend via Vite.
+3. Build the menubar Swift app via swift build.
+4. Build the backend executable via Briefcase (unless overridden).
+5. Assemble `build/Release/iCloudBridge.app` with binaries + assets.
+6. Create a compressed DMG for distribution.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BUILD_DIR = ROOT / "build"
+RELEASE_ROOT = BUILD_DIR / "Release"
+APP_NAME = "iCloudBridge.app"
+APP_ROOT = RELEASE_ROOT / APP_NAME
+INFO_PLIST_TEMPLATE = ROOT / "macos" / "AppBundle" / "Info.plist"
+FRONTEND_DIR = ROOT / "frontend"
+MENUBAR_DIR = ROOT / "macos" / "MenubarApp"
+BRIEFCASE_APP_PATH = (
+    ROOT / "build" / "backend" / "macos" / "app" / "iCloudBridgeBackend.app"
+)
+
+
+def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
+    location = cwd or ROOT
+    print(f"→ {' '.join(cmd)}")
+    subprocess.run(cmd, cwd=str(location), check=True, env=env)
+
+
+def read_version() -> str:
+    with open(ROOT / "pyproject.toml", "rb") as fh:
+        data = tomllib.load(fh)
+    return data["tool"]["poetry"]["version"]
+
+
+def clean_release_dir() -> None:
+    if RELEASE_ROOT.exists():
+        shutil.rmtree(RELEASE_ROOT, ignore_errors=True)
+    (APP_ROOT / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
+    (APP_ROOT / "Contents" / "Resources").mkdir(parents=True, exist_ok=True)
+
+
+def install_poetry_dependencies() -> None:
+    run(["poetry", "install", "--only", "main"])
+
+
+def build_frontend() -> None:
+    run(["npm", "--prefix", str(FRONTEND_DIR), "ci"])
+    run(["npm", "--prefix", str(FRONTEND_DIR), "run", "build"])
+
+
+def build_menubar_binary() -> Path:
+    run(["swift", "build", "-c", "release"], cwd=MENUBAR_DIR)
+    binary = MENUBAR_DIR / ".build" / "release" / "iCloudBridgeMenubar"
+    if not binary.exists():
+        raise FileNotFoundError(f"Menubar binary not found at {binary}")
+    return binary
+
+
+def copy_binary(src: Path, dest: Path) -> None:
+    shutil.copy2(src, dest)
+    dest.chmod(0o755)
+
+
+def build_backend_with_briefcase() -> Path:
+    env = os.environ.copy()
+
+    def briefcase_cmd(subcommand: str) -> None:
+        run(
+            ["poetry", "run", "briefcase", subcommand, "macOS", "app", "-a", "backend", "--no-input"],
+            env=env,
+        )
+
+    briefcase_cmd("create")
+    briefcase_cmd("update")
+    briefcase_cmd("build")
+
+    if not BRIEFCASE_APP_PATH.exists():
+        raise FileNotFoundError(f"Briefcase build did not produce app at {BRIEFCASE_APP_PATH}")
+    return BRIEFCASE_APP_PATH
+
+
+def stage_app_bundle(version: str, menubar_binary: Path, backend_app_path: Path) -> None:
+    contents = APP_ROOT / "Contents"
+    macos_dir = contents / "MacOS"
+    resources_dir = contents / "Resources"
+    frameworks_dir = contents / "Frameworks"
+    resources_dir.mkdir(parents=True, exist_ok=True)
+    frameworks_dir.mkdir(parents=True, exist_ok=True)
+    backend_contents = backend_app_path / "Contents"
+    backend_macos = backend_contents / "MacOS"
+    backend_resources = backend_contents / "Resources"
+    backend_frameworks = backend_contents / "Frameworks"
+
+    backend_info_path = backend_contents / "Info.plist"
+    backend_info = plistlib.loads(backend_info_path.read_bytes())
+    template_info = plistlib.loads(INFO_PLIST_TEMPLATE.read_bytes())
+    template_info["CFBundleShortVersionString"] = version
+    template_info["CFBundleVersion"] = version
+    if main_module := backend_info.get("MainModule"):
+        template_info["MainModule"] = main_module
+    plist_path = contents / "Info.plist"
+    with plist_path.open("wb") as plist_file:
+        plistlib.dump(template_info, plist_file)
+    app_icon_source = ROOT / "macos" / "AppBundle" / "AppIcon.icns"
+    if app_icon_source.exists():
+        shutil.copy2(app_icon_source, resources_dir / "AppIcon.icns")
+
+    # Sync backend runtime payload
+    backend_binary_src = backend_macos / "iCloudBridgeBackend"
+    backend_binary_dest = macos_dir / "icloudbridge-backend"
+    copy_binary(backend_binary_src, backend_binary_dest)
+
+    if backend_frameworks.exists():
+        for item in backend_frameworks.iterdir():
+            dest = frameworks_dir / item.name
+            if item.is_dir():
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(item, dest)
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, dest)
+
+    if backend_resources.exists():
+        for item in backend_resources.iterdir():
+            dest = resources_dir / item.name
+            if item.is_dir():
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(item, dest)
+            else:
+                shutil.copy2(item, dest)
+
+    copy_binary(menubar_binary, macos_dir / "iCloudBridgeMenubar")
+
+    public_dir = resources_dir / "public"
+    if public_dir.exists():
+        shutil.rmtree(public_dir)
+    shutil.copytree(FRONTEND_DIR / "dist", public_dir)
+
+
+def create_dmg() -> Path:
+    dmg = RELEASE_ROOT / "iCloudBridge.dmg"
+    if dmg.exists():
+        dmg.unlink()
+    run(
+        [
+            "hdiutil",
+            "create",
+            "-volname",
+            "iCloudBridge",
+            "-srcfolder",
+            str(APP_ROOT),
+            "-ov",
+            "-format",
+            "UDZO",
+            str(dmg),
+        ]
+    )
+    return dmg
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--skip-dmg", action="store_true", help="Skip DMG creation (debug)")
+    parser.add_argument(
+        "--backend-app",
+        type=Path,
+        help="Path to a Briefcase-generated backend .app bundle to embed",
+        default=os.environ.get("ICLOUDBRIDGE_BACKEND_APP"),
+    )
+    args = parser.parse_args()
+
+    version = read_version()
+    clean_release_dir()
+    install_poetry_dependencies()
+    build_frontend()
+    menubar_binary = build_menubar_binary()
+    backend_app: Path
+    if args.backend_app:
+        backend_path = Path(args.backend_app).expanduser()
+        if not backend_path.exists():
+            raise FileNotFoundError(f"Backend app not found at {backend_path}")
+        backend_app = backend_path.resolve()
+    else:
+        backend_app = build_backend_with_briefcase()
+    stage_app_bundle(version, menubar_binary, backend_app)
+    dmg_path = None
+    if not args.skip_dmg:
+        dmg_path = create_dmg()
+
+    print("\nBuild complete:")
+    print(f"  App bundle: {APP_ROOT}")
+    if dmg_path:
+        print(f"  DMG: {dmg_path}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as exc:
+        print(f"Command failed with exit code {exc.returncode}: {' '.join(exc.cmd)}", file=sys.stderr)
+        sys.exit(exc.returncode)
+    except FileNotFoundError as exc:
+        print(f"Required tool is missing: {exc}", file=sys.stderr)
+        sys.exit(1)
