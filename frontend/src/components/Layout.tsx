@@ -14,6 +14,7 @@ import {
   Monitor,
   Menu,
   X,
+  HelpCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -195,6 +196,27 @@ export default function Layout() {
             <Menu className="w-5 h-5" />
           </Button>
           <div className="flex items-center gap-4">
+            <TooltipProvider>
+              <Tooltip delayDuration={0}>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    asChild
+                  >
+                    <a
+                      href="https://docs.icloudbridge.app"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="Documentation"
+                    >
+                      <HelpCircle className="w-5 h-5" />
+                    </a>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Documentation</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
             <Badge variant="outline">v0.1.0</Badge>
           </div>
         </header>
