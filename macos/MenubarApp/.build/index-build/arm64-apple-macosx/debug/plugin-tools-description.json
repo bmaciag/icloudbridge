@@ -30,6 +30,106 @@
 
   ],
   "swiftCommands" : {
+    "C.iCloudBridgeLoginHelper-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeLoginHelper.build/sources",
+      "importPath" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/LoginItemHelper/main.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeLoginHelper.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "iCloudBridgeLoginHelper",
+      "moduleOutputPath" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/Modules/iCloudBridgeLoginHelper.swiftmodule",
+      "objects" : [
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeLoginHelper.build/main.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-Onone",
+        "-enable-testing",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "iCloudBridgeLoginHelper_main",
+        "-parse-as-library",
+        "-swift-version",
+        "5",
+        "-Xfrontend",
+        "-experimental-lazy-typecheck",
+        "-Xfrontend",
+        "-experimental-skip-all-function-bodies",
+        "-Xfrontend",
+        "-experimental-allow-module-with-compiler-errors",
+        "-Xfrontend",
+        "-empty-abi-descriptor",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.1.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.1.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "menubarapp"
+      ],
+      "outputFileMapPath" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeLoginHelper.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/Modules/iCloudBridgeLoginHelper.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : true,
+      "sources" : [
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/LoginItemHelper/main.swift"
+      ],
+      "tempsPath" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeLoginHelper.build",
+      "wholeModuleOptimization" : false
+    },
     "C.iCloudBridgeMenubar-arm64-apple-macosx26.0-debug.module" : {
       "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
       "fileList" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/sources",
@@ -50,6 +150,18 @@
         {
           "kind" : "file",
           "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/MenuController.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/Preflight.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightCoordinator.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightWindow.swift"
         },
         {
           "kind" : "file",
@@ -88,6 +200,9 @@
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/BackendProcessManager.swift.o",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/LaunchAgentManager.swift.o",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/MenuController.swift.o",
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/Preflight.swift.o",
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightCoordinator.swift.o",
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightWindow.swift.o",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/StatusIconProvider.swift.o",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/SyncStatusObserver.swift.o",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/main.swift.o",
@@ -99,8 +214,6 @@
         "-incremental",
         "-enable-batch-mode",
         "-serialize-diagnostics",
-        "-index-store-path",
-        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/index/store",
         "-Onone",
         "-enable-testing",
         "-j10",
@@ -110,6 +223,10 @@
         "-module-cache-path",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/ModuleCache",
         "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "iCloudBridgeMenubar_main",
         "-swift-version",
         "5",
         "-Xfrontend",
@@ -165,6 +282,9 @@
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/BackendProcessManager.swift",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/LaunchAgentManager.swift",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/MenuController.swift",
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/Preflight.swift",
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightCoordinator.swift",
+        "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightWindow.swift",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/StatusIconProvider.swift",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/SyncStatusObserver.swift",
         "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/main.swift",
@@ -178,6 +298,79 @@
 
   },
   "swiftTargetScanArgs" : {
+    "iCloudBridgeLoginHelper" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "iCloudBridgeLoginHelper",
+      "-package-name",
+      "menubarapp",
+      "-c",
+      "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/LoginItemHelper/main.swift",
+      "-I",
+      "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-Onone",
+      "-enable-testing",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "iCloudBridgeLoginHelper_main",
+      "-parse-as-library",
+      "-swift-version",
+      "5",
+      "-Xfrontend",
+      "-experimental-lazy-typecheck",
+      "-Xfrontend",
+      "-experimental-skip-all-function-bodies",
+      "-Xfrontend",
+      "-experimental-allow-module-with-compiler-errors",
+      "-Xfrontend",
+      "-empty-abi-descriptor",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.1.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.1.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "menubarapp",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
     "iCloudBridgeMenubar" : [
       "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
       "-module-name",
@@ -189,6 +382,9 @@
       "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/BackendProcessManager.swift",
       "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/LaunchAgentManager.swift",
       "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/MenuController.swift",
+      "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/Preflight.swift",
+      "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightCoordinator.swift",
+      "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightWindow.swift",
       "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/StatusIconProvider.swift",
       "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/SyncStatusObserver.swift",
       "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/main.swift",
@@ -200,8 +396,6 @@
       "-incremental",
       "-enable-batch-mode",
       "-serialize-diagnostics",
-      "-index-store-path",
-      "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/index/store",
       "-Onone",
       "-enable-testing",
       "-j10",
@@ -211,6 +405,10 @@
       "-module-cache-path",
       "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/ModuleCache",
       "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "iCloudBridgeMenubar_main",
       "-swift-version",
       "5",
       "-Xfrontend",
@@ -257,6 +455,9 @@
     ]
   },
   "targetDependencyMap" : {
+    "iCloudBridgeLoginHelper" : [
+
+    ],
     "iCloudBridgeMenubar" : [
 
     ]
@@ -273,6 +474,20 @@
     }
   },
   "writeCommands" : {
+    "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeLoginHelper.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/LoginItemHelper/main.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeLoginHelper.build/sources"
+    },
     "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/sources" : {
       "alwaysOutOfDate" : false,
       "inputs" : [
@@ -295,6 +510,18 @@
         {
           "kind" : "file",
           "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/MenuController.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/Preflight.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightCoordinator.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightWindow.swift"
         },
         {
           "kind" : "file",

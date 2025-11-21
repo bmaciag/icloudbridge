@@ -30,6 +30,27 @@
     "swift-dependencies": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/MenuController.swiftdeps",
     "diagnostics": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/MenuController.dia"
   },
+  "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/Preflight.swift": {
+    "dependencies": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/Preflight.d",
+    "object": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/Preflight.swift.o",
+    "swiftmodule": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/Preflight~partial.swiftmodule",
+    "swift-dependencies": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/Preflight.swiftdeps",
+    "diagnostics": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/Preflight.dia"
+  },
+  "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightCoordinator.swift": {
+    "dependencies": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightCoordinator.d",
+    "object": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightCoordinator.swift.o",
+    "swiftmodule": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightCoordinator~partial.swiftmodule",
+    "swift-dependencies": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightCoordinator.swiftdeps",
+    "diagnostics": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightCoordinator.dia"
+  },
+  "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/PreflightWindow.swift": {
+    "dependencies": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightWindow.d",
+    "object": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightWindow.swift.o",
+    "swiftmodule": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightWindow~partial.swiftmodule",
+    "swift-dependencies": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightWindow.swiftdeps",
+    "diagnostics": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/PreflightWindow.dia"
+  },
   "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/Sources/iCloudBridgeMenubar/StatusIconProvider.swift": {
     "dependencies": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/StatusIconProvider.d",
     "object": "/Users/keithv/LocalCode/keithvassallomt/iCloudBridge/macos/MenubarApp/.build/index-build/arm64-apple-macosx/debug/iCloudBridgeMenubar.build/StatusIconProvider.swift.o",
