@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Terminal, Download, Trash2, Search, Filter, X } from 'lucide-react';
+import { Terminal, Download, Trash2, Search, Filter } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -392,7 +392,7 @@ export default function Logs() {
         <CardContent>
           <div
             ref={logsContainerRef}
-            className="bg-black dark:bg-black rounded-lg p-4 h-[600px] overflow-y-auto font-mono text-sm"
+            className="bg-slate-50 dark:bg-black rounded-lg p-4 h-[600px] overflow-y-auto font-mono text-sm"
           >
             {filteredLogs.length === 0 ? (
               <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -415,10 +415,10 @@ export default function Logs() {
                 {filteredLogs.map((log, idx) => (
                   <div
                     key={idx}
-                    className="flex items-start gap-3 py-1 hover:bg-white/5 rounded px-2 -mx-2"
+                    className="flex items-start gap-3 py-1 hover:bg-slate-200 dark:hover:bg-white/5 rounded px-2 -mx-2"
                   >
                     {/* Timestamp */}
-                    <span className="text-gray-500 dark:text-gray-500 shrink-0 select-none">
+                    <span className="text-gray-600 dark:text-gray-500 shrink-0 select-none">
                       {formatTimestamp(log.timestamp)}
                     </span>
 
@@ -437,7 +437,7 @@ export default function Logs() {
 
                     {/* Message */}
                     <span
-                      className="flex-1 text-gray-100 dark:text-gray-100"
+                      className="flex-1 text-gray-800 dark:text-gray-100"
                       style={{
                         color:
                           log.level === 'ERROR'
@@ -470,7 +470,7 @@ export default function Logs() {
               <span className="text-muted-foreground">DEBUG - Detailed diagnostic information</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-blue-500" />
+              <div className="w-3 h-3 rounded-full bg-[rgb(6,234,70)]" />
               <span className="text-muted-foreground">INFO - General informational messages</span>
             </div>
             <div className="flex items-center gap-2">

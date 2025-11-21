@@ -267,7 +267,7 @@ export default function Dashboard() {
               </Badge>
             </div>
             {activeSyncs.has('notes') ? (
-              <div className="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-2">
+              <div className="text-xs text-primary flex items-center gap-2">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 <span>Syncing... {activeSyncs.get('notes')?.message}</span>
               </div>
@@ -307,7 +307,7 @@ export default function Dashboard() {
               </Badge>
             </div>
             {activeSyncs.has('reminders') ? (
-              <div className="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-2">
+              <div className="text-xs text-primary flex items-center gap-2">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 <span>Syncing... {activeSyncs.get('reminders')?.message}</span>
               </div>
@@ -339,7 +339,7 @@ export default function Dashboard() {
               </Badge>
             </div>
             {activeSyncs.has('passwords') ? (
-              <div className="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-2">
+              <div className="text-xs text-primary flex items-center gap-2">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 <span>Syncing... {activeSyncs.get('passwords')?.message}</span>
               </div>
@@ -375,7 +375,7 @@ export default function Dashboard() {
               </Badge>
             </div>
             {activeSyncs.has('photos') ? (
-              <div className="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-2">
+              <div className="text-xs text-primary flex items-center gap-2">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 <span>Syncing... {activeSyncs.get('photos')?.message}</span>
               </div>
@@ -448,7 +448,7 @@ export default function Dashboard() {
                         ? 'rgb(239 68 68)'
                         : log.level === 'WARNING'
                         ? 'rgb(234 179 8)'
-                        : 'rgb(59 130 246)',
+                        : 'rgb(6 234 70)',
                   }}
                 >
                   <Badge variant="outline" className="text-xs">

@@ -90,9 +90,14 @@ export default function Layout() {
           <div className="h-16 flex items-center justify-between px-6 border-b">
             <div className="flex items-center gap-3">
               <img
-                src="/icloudbridge_650.png"
+                src="/icloudbridge_dark_650.png"
                 alt="iCloudBridge"
-                className="h-10 w-auto rounded-md shadow-sm"
+                className="h-10 w-auto rounded-md shadow-sm dark:hidden"
+              />
+              <img
+                src="/icloudbridge_light_650.png"
+                alt="iCloudBridge"
+                className="h-10 w-auto rounded-md shadow-sm hidden dark:block"
               />
               <span className="font-semibold text-lg">iCloudBridge</span>
             </div>

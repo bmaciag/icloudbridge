@@ -53,7 +53,7 @@ final class BackendProcessManager {
         guard let bundleURL = Bundle.main.bundleURL as URL? else { return nil }
         let candidate = bundleURL
             .appendingPathComponent("Contents")
-            .appendingPathComponent("MacOS")
+            .appendingPathComponent("Resources")
             .appendingPathComponent("icloudbridge-backend")
         return FileManager.default.isExecutableFile(atPath: candidate.path) ? candidate : nil
     }

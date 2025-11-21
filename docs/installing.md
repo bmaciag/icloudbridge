@@ -8,7 +8,7 @@ You'll start by downloading the latest release of iCloudBridge from the [GitHub 
 
 Once you've downloaded the app, simply double-click the `.dmg` file and drag the iCloudBridge app to your Applications folder.
 
-TODO: Screenshot goes here
+![iCloudBridge DMG](images/docs_dmg.png)
 
 ## Launching the WebUI
 

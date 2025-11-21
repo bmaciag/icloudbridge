@@ -468,8 +468,17 @@ export default function FirstRunWizard() {
         return (
           <div className="space-y-6 py-4">
             <div className="text-center space-y-4">
-              <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto">
-                <span className="text-primary-foreground text-2xl font-bold">iC</span>
+              <div className="mx-auto">
+                <img
+                  src="/icloudbridge_dark_650.png"
+                  alt="iCloudBridge"
+                  className="h-16 w-auto mx-auto dark:hidden"
+                />
+                <img
+                  src="/icloudbridge_light_650.png"
+                  alt="iCloudBridge"
+                  className="h-16 w-auto mx-auto hidden dark:block"
+                />
               </div>
               <div>
                 <h3 className="text-2xl font-bold">Welcome to iCloudBridge!</h3>

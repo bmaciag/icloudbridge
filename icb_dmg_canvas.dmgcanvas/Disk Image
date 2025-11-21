@@ -1,0 +1,64 @@
+{
+  "diskImage" : {
+    "autoopen" : true,
+    "background" : {
+      "image" : "backgroundImage",
+      "imageScaleOption" : 50,
+      "layoutObjects" : [
+
+      ],
+      "type" : 0
+    },
+    "defaultLicenseLanguage" : "English",
+    "format" : "APFS",
+    "iconPreviewVisible" : false,
+    "iconSize" : 108,
+    "itemInfoVisible" : false,
+    "labelPosition" : 0,
+    "licenses" : [
+      {
+        "agreeButtonTitle" : "Agree",
+        "disagreeButtonTitle" : "Disagree",
+        "language" : "English",
+        "printButtonTitle" : "Print",
+        "prompt" : "IMPORTANT - Read this License Agreement carefully before clicking on the \"Agree\" button. By clicking on the \"Agree\" button, you agree to be bound by the terms of the License Agreement.",
+        "saveButtonTitle" : "Save…",
+        "systemLanguageID" : 0
+      }
+    ],
+    "nameFontSize" : 12,
+    "statusBarVisible" : false,
+    "suggestedDiskImageName" : "iCloudBridge.dmg",
+    "toolbarVisible" : false,
+    "uid" : "bccvvtrwvb",
+    "validationScheme" : 0,
+    "viewLayout" : 0,
+    "volumeIcon" : "volumeIcon",
+    "volumeName" : "iCloudBridge",
+    "volumeSize" : 0,
+    "volumeSizeOption" : "Automatic",
+    "windowContentHeight" : 500,
+    "windowContents" : [
+      {
+        "filePath" : "\/Users\/keithv\/LocalCode\/keithvassallomt\/iCloudBridge\/build\/Release\/iCloudBridge.app",
+        "iconSize" : 100,
+        "invisible" : false,
+        "isAnAlias" : false,
+        "location" : "{149, 187}",
+        "relativeFilePath" : "build\/Release\/iCloudBridge.app"
+      },
+      {
+        "filePath" : "\/Applications",
+        "iconSize" : 100,
+        "invisible" : false,
+        "isAnAlias" : true,
+        "location" : "{682, 187}",
+        "relativeFilePath" : "..\/..\/..\/..\/..\/Applications"
+      }
+    ],
+    "windowContentWidth" : 900,
+    "windowLeft" : 200,
+    "windowTop" : 120
+  },
+  "version" : 4
+}

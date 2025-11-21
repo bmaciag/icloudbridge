@@ -101,8 +101,47 @@ final class MenuController {
     }
 
     @objc private func openWebUI() {
-        guard let url = URL(string: "http://127.0.0.1:27731/") else { return }
-        NSWorkspace.shared.open(url)
+        checkBackendHealthAndOpenUI()
+    }
+
+    private func checkBackendHealthAndOpenUI() {
+        let healthURL = URL(string: "http://127.0.0.1:27731/api/health")!
+
+        // Try to connect to backend
+        let task = URLSession.shared.dataTask(with: healthURL) { [weak self] data, response, error in
+            guard let self else { return }
+
+            if error == nil, let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                // Backend is ready, open web UI
+                DispatchQueue.main.async {
+                    guard let url = URL(string: "http://127.0.0.1:27731/") else { return }
+                    NSWorkspace.shared.open(url)
+                }
+            } else {
+                // Backend not ready yet, show alert and retry
+                DispatchQueue.main.async {
+                    self.showBackendStartingAlert()
+                }
+            }
+        }
+        task.resume()
+    }
+
+    private func showBackendStartingAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Starting Backend"
+        alert.informativeText = "The iCloudBridge backend is starting up. This takes a few seconds on first launch.\n\nThe web UI will open automatically when ready."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            // User clicked OK, wait and retry
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.checkBackendHealthAndOpenUI()
+            }
+        }
     }
 
     @objc private func toggleLoginItemAction() {
