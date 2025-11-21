@@ -1,5 +1,6 @@
 {
   "diskImage" : {
+    "appleID" : "keithv@me.com",
     "autoopen" : true,
     "background" : {
       "image" : "backgroundImage",
@@ -9,6 +10,7 @@
       ],
       "type" : 0
     },
+    "codeSigningIdentityString" : "2F001C8D6864E389A1C6E5D3B8F3BF8B19332801",
     "defaultLicenseLanguage" : "English",
     "format" : "APFS",
     "iconPreviewVisible" : false,
@@ -29,9 +31,10 @@
     "nameFontSize" : 12,
     "statusBarVisible" : false,
     "suggestedDiskImageName" : "iCloudBridge.dmg",
+    "teamID" : "W4SF9AYV8T",
     "toolbarVisible" : false,
     "uid" : "bccvvtrwvb",
-    "validationScheme" : 0,
+    "validationScheme" : 2,
     "viewLayout" : 0,
     "volumeIcon" : "volumeIcon",
     "volumeName" : "iCloudBridge",
