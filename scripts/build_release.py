@@ -195,12 +195,13 @@ def sign_app_bundle(production: bool = False) -> None:
     """Sign the app bundle (menubar binary; resources are data only)."""
     sign_identity = DEVELOPER_ID if production else "-"
     print(f"→ Signing app bundle ({'production' if production else 'debug'})")
+    entitlements_path = ENTITLEMENTS_FILE
 
     # 1. Sign menubar executable in MacOS (with hardened runtime if production)
     menubar_binary = APP_ROOT / "Contents" / "MacOS" / "iCloudBridgeMenubar"
     if menubar_binary.exists():
         print(f"  Signing {menubar_binary.name}")
-        args = ["codesign", "--force", "--sign", sign_identity]
+        args = ["codesign", "--force", "--entitlements", str(entitlements_path), "--sign", sign_identity]
         if production:
             args.extend(["--options", "runtime", "--timestamp"])
         args.append(str(menubar_binary))
@@ -218,13 +219,9 @@ def sign_app_bundle(production: bool = False) -> None:
 
     # 4. Sign outer app bundle last
     print(f"  Signing {APP_ROOT.name}")
-    args = ["codesign", "--force", "--sign", sign_identity]
+    args = ["codesign", "--force", "--entitlements", str(ENTITLEMENTS_FILE), "--sign", sign_identity]
     if production:
-        args.extend([
-            "--options", "runtime",
-            "--entitlements", str(ENTITLEMENTS_FILE),
-            "--timestamp"
-        ])
+        args.extend(["--options", "runtime", "--timestamp"])
     args.append(str(APP_ROOT))
     run(args)
 

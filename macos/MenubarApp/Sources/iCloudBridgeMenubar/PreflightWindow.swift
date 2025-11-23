@@ -36,6 +36,15 @@ final class PreflightWindowController: NSWindowController {
     var onOpenAccessibility: (() -> Void)? {
         didSet { setCallbacks() }
     }
+    var onOpenNotesAutomation: (() -> Void)? {
+        didSet { setCallbacks() }
+    }
+    var onOpenRemindersAutomation: (() -> Void)? {
+        didSet { setCallbacks() }
+    }
+    var onOpenPhotosAutomation: (() -> Void)? {
+        didSet { setCallbacks() }
+    }
     var onRefresh: (() -> Void)? {
         didSet { setCallbacks() }
     }
@@ -75,6 +84,9 @@ final class PreflightWindowController: NSWindowController {
         hostingController.rootView.onInstallRuby = onInstallRuby
         hostingController.rootView.onOpenFullDiskAccess = onOpenFullDiskAccess
         hostingController.rootView.onOpenAccessibility = onOpenAccessibility
+        hostingController.rootView.onOpenNotesAutomation = onOpenNotesAutomation
+        hostingController.rootView.onOpenRemindersAutomation = onOpenRemindersAutomation
+        hostingController.rootView.onOpenPhotosAutomation = onOpenPhotosAutomation
         hostingController.rootView.onRefresh = onRefresh
         hostingController.rootView.onCloseRequested = onCloseRequested
         hostingController.rootView.onToggleSuppress = onToggleSuppress
@@ -89,6 +101,9 @@ struct PreflightView: View {
     var onInstallRuby: (() -> Void)?
     var onOpenFullDiskAccess: (() -> Void)?
     var onOpenAccessibility: (() -> Void)?
+    var onOpenNotesAutomation: (() -> Void)?
+    var onOpenRemindersAutomation: (() -> Void)?
+    var onOpenPhotosAutomation: (() -> Void)?
     var onRefresh: (() -> Void)?
     var onCloseRequested: (() -> Void)?
     var onToggleSuppress: ((Bool) -> Void)?
@@ -144,7 +159,7 @@ struct PreflightView: View {
                 Text("Permissions").font(.headline).padding(.top, 8)
                 VStack(spacing: 8) {
                     RequirementRow(
-                        title: "Notes Full Disk Access",
+                        title: "Full Disk Access",
                         status: status(for: .fullDiskAccess),
                         actionTitle: "Open System Settings",
                         actionEnabled: isActionEnabled(for: .fullDiskAccess),
@@ -157,13 +172,46 @@ struct PreflightView: View {
                     RequirementRow(
                         title: "Accessibility",
                         status: status(for: .accessibility),
-                        actionTitle: "Open System Settings",
+                        actionTitle: "Allow Accessibility control",
                         actionEnabled: isActionEnabled(for: .accessibility),
                         showsProgress: false,
                         progress: nil,
                         logURL: nil,
                         onShowLogs: nil,
                         action: { onOpenAccessibility?() }
+                    )
+                    RequirementRow(
+                        title: "Apple Notes",
+                        status: status(for: .notesAutomation),
+                        actionTitle: "Request Access",
+                        actionEnabled: isActionEnabled(for: .notesAutomation),
+                        showsProgress: false,
+                        progress: nil,
+                        logURL: nil,
+                        onShowLogs: nil,
+                        action: { onOpenNotesAutomation?() }
+                    )
+                    RequirementRow(
+                        title: "Apple Reminders",
+                        status: status(for: .remindersAutomation),
+                        actionTitle: "Request Access",
+                        actionEnabled: isActionEnabled(for: .remindersAutomation),
+                        showsProgress: false,
+                        progress: nil,
+                        logURL: nil,
+                        onShowLogs: nil,
+                        action: { onOpenRemindersAutomation?() }
+                    )
+                    RequirementRow(
+                        title: "Apple Photos",
+                        status: status(for: .photosAutomation),
+                        actionTitle: "Request Access",
+                        actionEnabled: isActionEnabled(for: .photosAutomation),
+                        showsProgress: false,
+                        progress: nil,
+                        logURL: nil,
+                        onShowLogs: nil,
+                        action: { onOpenPhotosAutomation?() }
                     )
                 }
                 .padding(12)
@@ -176,18 +224,25 @@ struct PreflightView: View {
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            let ready = snapshot.statuses.allSatisfy { $0.state.isSatisfied }
+
             Toggle("Don't show this next time", isOn: Binding(
-                get: { snapshot.suppressNext },
+                get: { ready ? snapshot.suppressNext : false },
                 set: { value in
+                    guard ready else { return }
                     onToggleSuppress?(value)
                     model.snapshot = PreflightSnapshot(statuses: snapshot.statuses, suppressNext: value, allSatisfied: snapshot.allSatisfied, progress: snapshot.progress, logs: snapshot.logs)
                 }
             ))
             .toggleStyle(.switch)
-            .onChange(of: snapshot.allSatisfied) { newValue in
+            .disabled(!ready)
+            .onChange(of: ready) { newValue in
                 if newValue && !snapshot.suppressNext {
                     onToggleSuppress?(true)
                     model.snapshot = PreflightSnapshot(statuses: snapshot.statuses, suppressNext: true, allSatisfied: snapshot.allSatisfied, progress: snapshot.progress, logs: snapshot.logs)
+                } else if !newValue {
+                    onToggleSuppress?(false)
+                    model.snapshot = PreflightSnapshot(statuses: snapshot.statuses, suppressNext: false, allSatisfied: snapshot.allSatisfied, progress: snapshot.progress, logs: snapshot.logs)
                 }
             }
 

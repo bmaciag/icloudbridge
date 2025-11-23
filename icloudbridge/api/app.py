@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -172,6 +173,18 @@ def create_app() -> FastAPI:
             name="frontend",
         )
         logger.info("Serving frontend assets from %s", frontend_path)
+
+        index_file = frontend_path / "index.html"
+
+        @app.exception_handler(404)
+        async def spa_fallback(request: Request, exc: Exception):
+            """Serve index.html for non-API routes so client-side routing works."""
+            path = request.url.path
+            if path.startswith("/api"):
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
+            if index_file.exists():
+                return FileResponse(index_file)
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
     else:
         # Root endpoint only when we are not serving static frontend files
         @app.get("/")

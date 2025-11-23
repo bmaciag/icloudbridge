@@ -154,37 +154,49 @@ final class PreflightCoordinator {
     }
 
     private func showWindow(force: Bool = false) {
-        if windowController == nil {
-            let controller = PreflightWindowController()
-            controller.onInstallHomebrew = { [weak self] in self?.preflightManager.installHomebrew() }
-            controller.onInstallPython = { [weak self] in self?.preflightManager.installPython() }
-            controller.onInstallRuby = { [weak self] in self?.preflightManager.installRuby() }
-            controller.onOpenFullDiskAccess = { [weak self] in self?.preflightManager.openFullDiskAccessPreferences() }
-            controller.onOpenAccessibility = { [weak self] in self?.preflightManager.openAccessibilityPreferences() }
-            controller.onRefresh = { [weak self] in self?.preflightManager.runFullCheck() }
-            controller.onCloseRequested = { [weak self] in self?.handleCloseRequested() }
-            controller.onToggleSuppress = { [weak self] suppress in
-                self?.defaults.set(suppress, forKey: self?.suppressKey ?? "")
+        let presentWindow: () -> Void = { [weak self] in
+            guard let self else { return }
+            if self.windowController == nil {
+                let controller = PreflightWindowController()
+                controller.onInstallHomebrew = { [weak self] in self?.preflightManager.installHomebrew() }
+                controller.onInstallPython = { [weak self] in self?.preflightManager.installPython() }
+                controller.onInstallRuby = { [weak self] in self?.preflightManager.installRuby() }
+                controller.onOpenFullDiskAccess = { [weak self] in self?.preflightManager.openFullDiskAccessPreferences() }
+                controller.onOpenAccessibility = { [weak self] in self?.preflightManager.requestAccessibilityPrompt() }
+                controller.onOpenNotesAutomation = { [weak self] in self?.preflightManager.requestNotesAutomation() }
+                controller.onOpenRemindersAutomation = { [weak self] in self?.preflightManager.requestRemindersAccess() }
+                controller.onOpenPhotosAutomation = { [weak self] in self?.preflightManager.requestPhotosAutomation() }
+                controller.onRefresh = { [weak self] in self?.preflightManager.runFullCheck() }
+                controller.onCloseRequested = { [weak self] in self?.handleCloseRequested() }
+                controller.onToggleSuppress = { [weak self] suppress in
+                    self?.defaults.set(suppress, forKey: self?.suppressKey ?? "")
+                }
+
+                self.windowController = controller
+                controller.showWindow(nil)
+                controller.window?.makeKeyAndOrderFront(nil)
+                self.defaults.set(true, forKey: self.shownKey)
+
+                let snapshot = PreflightSnapshot(
+                    statuses: self.preflightManager.currentStatuses(),
+                    suppressNext: self.shouldSuppressWhenHealthy,
+                    allSatisfied: false,
+                    progress: self.runtimeProgress(),
+                    logs: self.runtimeLogs()
+                )
+                controller.apply(snapshot: snapshot)
+            } else {
+                if force || !(self.windowController?.window?.isVisible ?? false) {
+                    self.windowController?.showWindow(nil)
+                    self.windowController?.window?.makeKeyAndOrderFront(nil)
+                }
             }
+        }
 
-            windowController = controller
-            controller.showWindow(nil)
-            controller.window?.makeKeyAndOrderFront(nil)
-            defaults.set(true, forKey: shownKey)
-
-            let snapshot = PreflightSnapshot(
-                statuses: preflightManager.currentStatuses(),
-                suppressNext: shouldSuppressWhenHealthy,
-                allSatisfied: false,
-                progress: runtimeProgress(),
-                logs: runtimeLogs()
-            )
-            controller.apply(snapshot: snapshot)
+        if Thread.isMainThread {
+            presentWindow()
         } else {
-            if force || !(windowController?.window?.isVisible ?? false) {
-                windowController?.showWindow(nil)
-                windowController?.window?.makeKeyAndOrderFront(nil)
-            }
+            DispatchQueue.main.async { presentWindow() }
         }
     }
 

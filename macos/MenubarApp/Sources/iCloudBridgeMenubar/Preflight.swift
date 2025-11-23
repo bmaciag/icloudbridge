@@ -1,5 +1,7 @@
 import Cocoa
 import ApplicationServices
+import EventKit
+import Photos
 
 enum Requirement: CaseIterable {
     case homebrew
@@ -7,14 +9,20 @@ enum Requirement: CaseIterable {
     case ruby
     case fullDiskAccess
     case accessibility
+    case notesAutomation
+    case remindersAutomation
+    case photosAutomation
 
     var title: String {
         switch self {
         case .homebrew: return "Homebrew"
         case .python: return "Python 3.12 (Homebrew)"
         case .ruby: return "Ruby >= 3.4 (Homebrew)"
-        case .fullDiskAccess: return "Notes Full Disk Access"
+        case .fullDiskAccess: return "Full Disk Access"
         case .accessibility: return "Accessibility"
+        case .notesAutomation: return "Apple Notes"
+        case .remindersAutomation: return "Apple Reminders"
+        case .photosAutomation: return "Apple Photos"
         }
     }
 }
@@ -134,6 +142,9 @@ final class PreflightManager {
         update(.ruby, state: .checking)
         update(.fullDiskAccess, state: .checking)
         update(.accessibility, state: .checking)
+        update(.notesAutomation, state: .checking)
+        update(.remindersAutomation, state: .checking)
+        update(.photosAutomation, state: .checking)
 
         queue.async { [weak self] in
             guard let self else { return }
@@ -157,8 +168,17 @@ final class PreflightManager {
             let fdaState = self.checkFullDiskAccess()
             self.update(.fullDiskAccess, state: fdaState)
 
-            // Accessibility prompt must execute on the main thread; update state there.
-            self.checkAccessibilityAsync()
+            let accessibilityState = self.checkAccessibilityStatus()
+            self.update(.accessibility, state: accessibilityState)
+
+            let notesState = self.checkAutomationPermission(appName: "Notes", requestIfNeeded: false)
+            self.update(.notesAutomation, state: notesState)
+
+            let remindersState = self.checkRemindersPermission(requestIfNeeded: false)
+            self.update(.remindersAutomation, state: remindersState)
+
+            let photosState = self.checkPhotosPermission(requestIfNeeded: false)
+            self.update(.photosAutomation, state: photosState)
         }
     }
 
@@ -221,25 +241,50 @@ final class PreflightManager {
         NSWorkspace.shared.open(url)
     }
 
-    private func checkAccessibilityAsync() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if AXIsProcessTrusted() {
-                self.update(.accessibility, state: .satisfied("Accessibility permission granted"))
-                return
-            }
-            let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-            self.update(.accessibility, state: .actionRequired("Grant Accessibility permission in System Settings > Privacy & Security > Accessibility"))
+    func openAutomationPreferences() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") else { return }
+        NSWorkspace.shared.open(url)
+    }
 
-            // Re-check shortly after prompting in case the user just granted it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                guard let self else { return }
-                if AXIsProcessTrusted() {
-                    self.update(.accessibility, state: .satisfied("Accessibility permission granted"))
-                }
-            }
+    private func checkAccessibilityStatus() -> RequirementState {
+        if AXIsProcessTrusted() {
+            return .satisfied("Accessibility permission granted")
         }
+        return .actionRequired("Allow Accessibility control")
+    }
+
+    @discardableResult
+    private func checkAutomationPermission(appName: String, requestIfNeeded: Bool) -> RequirementState {
+        let scriptSource: String
+        switch appName {
+        case "Notes":
+            scriptSource = "tell application \"Notes\" to get id of default account"
+        case "Reminders":
+            scriptSource = "tell application \"Reminders\" to get name of default list"
+        default:
+            scriptSource = ""
+        }
+
+        guard let script = NSAppleScript(source: scriptSource) else {
+            return .failed("Could not create automation request for \(appName)")
+        }
+
+        var errorInfo: NSDictionary?
+        if requestIfNeeded {
+            _ = script.executeAndReturnError(&errorInfo)
+        } else {
+            _ = script.executeAndReturnError(&errorInfo)
+        }
+
+        if let errorInfo, let code = errorInfo[NSAppleScript.errorNumber] as? Int {
+            if code == -1743 || code == -1744 {
+                return .actionRequired("Allow Automation control of \(appName) in Privacy & Security > Automation")
+            }
+            let message = errorInfo[NSAppleScript.errorMessage] as? String ?? "Unknown error"
+            return .failed("Automation error for \(appName): \(message)")
+        }
+
+        return .satisfied("Automation permission granted for \(appName)")
     }
 
     private func update(_ requirement: Requirement, state: RequirementState) {
@@ -267,7 +312,7 @@ final class PreflightManager {
             installPython()
         case .ruby:
             installRuby()
-        case .fullDiskAccess, .accessibility:
+        case .fullDiskAccess, .accessibility, .notesAutomation, .remindersAutomation, .photosAutomation:
             break
         }
     }
@@ -358,5 +403,87 @@ final class PreflightManager {
         if let brewPath { return brewPath }
         brewPath = locateBrew()
         return brewPath
+    }
+
+    private func checkRemindersPermission(requestIfNeeded: Bool) -> RequirementState {
+        let status = EKEventStore.authorizationStatus(for: .reminder)
+        switch status {
+        case .authorized, .fullAccess, .writeOnly:
+            return .satisfied("Reminders permission granted")
+        case .notDetermined:
+            if !requestIfNeeded {
+                return .actionRequired("Allow Reminders access")
+            }
+            let store = EKEventStore()
+            let semaphore = DispatchSemaphore(value: 0)
+            var granted = false
+            store.requestAccess(to: .reminder) { ok, _ in
+                granted = ok
+                semaphore.signal()
+            }
+            _ = semaphore.wait(timeout: .now() + 5)
+            return granted ? .satisfied("Reminders permission granted") : .actionRequired("Allow Reminders access")
+        case .denied, .restricted:
+            return .actionRequired("Allow Reminders access in System Settings > Privacy & Security > Reminders")
+        @unknown default:
+            return .failed("Unknown Reminders permission state")
+        }
+    }
+
+    private func checkPhotosPermission(requestIfNeeded: Bool) -> RequirementState {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        switch status {
+        case .authorized, .limited:
+            return .satisfied("Photos permission granted")
+        case .notDetermined:
+            if !requestIfNeeded { return .actionRequired("Allow Photos access") }
+            var result: PHAuthorizationStatus = .notDetermined
+            let sema = DispatchSemaphore(value: 0)
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { auth in
+                result = auth
+                sema.signal()
+            }
+            _ = sema.wait(timeout: .now() + 5)
+            return (result == .authorized || result == .limited) ? .satisfied("Photos permission granted") : .actionRequired("Allow Photos access")
+        case .denied, .restricted:
+            return .actionRequired("Allow Photos access in System Settings > Privacy & Security > Photos")
+        @unknown default:
+            return .failed("Unknown Photos permission state")
+        }
+    }
+
+    // User-initiated permission requests
+    func requestAccessibilityPrompt() {
+        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        update(.accessibility, state: checkAccessibilityStatus())
+    }
+
+    func requestNotesAutomation() {
+        let state = checkAutomationPermission(appName: "Notes", requestIfNeeded: true)
+        update(.notesAutomation, state: state)
+    }
+
+    func requestPhotosAutomation() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { auth in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    let finalState: RequirementState
+                    if auth == .authorized || auth == .limited {
+                        finalState = .satisfied("Photos permission granted")
+                    } else {
+                        finalState = .actionRequired("Allow Photos access in System Settings > Privacy & Security > Photos")
+                    }
+                    self.update(.photosAutomation, state: finalState)
+                }
+            }
+        }
+    }
+
+    func requestRemindersAccess() {
+        let state = checkRemindersPermission(requestIfNeeded: true)
+        update(.remindersAutomation, state: state)
     }
 }
