@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -26,6 +26,7 @@ import { useWebSocket } from '@/hooks/useWebSocket';
 
 export default function Layout() {
   const location = useLocation();
+  const [appVersion, setAppVersion] = useState<string>(__APP_VERSION__ ?? '…');
   const {
     theme,
     setTheme,
@@ -61,6 +62,28 @@ export default function Layout() {
   useEffect(() => {
     setWsConnected(isConnected);
   }, [isConnected, setWsConnected]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const loadVersion = async () => {
+      try {
+        const response = await fetch('/api/version', { signal: controller.signal });
+        if (!response.ok) {
+          throw new Error(`Version fetch failed: ${response.status}`);
+        }
+        const data: { version?: string } = await response.json();
+        setAppVersion(data.version ?? __APP_VERSION__);
+      } catch (error) {
+        if ((error as Error).name !== 'AbortError') {
+          setAppVersion(__APP_VERSION__);
+        }
+      }
+    };
+
+    loadVersion();
+    return () => controller.abort();
+  }, []);
 
   const navigation = [
     { name: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -217,7 +240,7 @@ export default function Layout() {
                 <TooltipContent>Documentation</TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            <Badge variant="outline">v0.1.0</Badge>
+            <Badge variant="outline">v{appVersion}</Badge>
           </div>
         </header>
 

@@ -11,6 +11,7 @@ from typing import Literal
 from fastapi import APIRouter, Request, HTTPException, status
 from pydantic import BaseModel
 
+from icloudbridge import __version__
 from icloudbridge.api.dependencies import ConfigDep
 from icloudbridge.api.models import (
     SetupVerificationResponse,
@@ -64,11 +65,6 @@ async def get_system_info(config: ConfigDep) -> dict:
         System and application information including version,
         platform details, and configuration path.
     """
-    try:
-        from icloudbridge import __version__
-    except ImportError:
-        __version__ = "unknown"
-
     return {
         "version": __version__,
         "platform": platform.system(),

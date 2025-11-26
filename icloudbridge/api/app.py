@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from icloudbridge import __version__
 from icloudbridge.api.exceptions import (
     ICBException,
     icb_exception_handler,
@@ -107,7 +108,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="iCloudBridge API",
         description="REST API for iCloudBridge - Sync Apple Notes, Reminders, and Passwords",
-        version="0.1.0",
+        version=__version__,
         docs_url="/api/docs",
         redoc_url="/api/redoc",
         openapi_url="/api/openapi.json",
@@ -192,7 +193,7 @@ def create_app() -> FastAPI:
             """Root endpoint - returns API information."""
             return {
                 "name": "iCloudBridge API",
-                "version": "0.1.0",
+                "version": __version__,
                 "docs": "/api/docs",
                 "health": "/api/health",
             }

@@ -1,15 +1,15 @@
 [tool.poetry]
 name = "icloudbridge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Simplified API-based synchronization for Apple Notes & Reminders to NextCloud, CalDAV, and local folders"
 authors = ["Keith Vassallo <keith@vassallo.cloud>"]
 readme = "README.md"
 license = "GPL-3.0-or-later"
-homepage = "https://taskbridge.app/"
+homepage = "https://icloudbridge.app/"
 repository = "https://github.com/keithvassallomt/icloudbridge"
-keywords = ["sync", "note sync", "reminder sync", "cloud notes", "cloud reminders", "apple", "icloud"]
+keywords = ["sync", "note sync", "reminder sync", "photo sync", "password sync", "apple", "icloud"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
