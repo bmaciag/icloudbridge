@@ -12,7 +12,7 @@ enum LaunchAgentError: LocalizedError {
         case .bundlePathMissing:
             return "Could not locate the menubar bundle path."
         case .backendMissing:
-            return "Backend executable is missing from the app bundle."
+            return "Backend resources are missing from the app bundle."
         case .loginHelperMissing:
             return "Login helper is missing from the app bundle."
         case .processFailed(let message):
@@ -25,6 +25,8 @@ final class LaunchAgentManager {
     private let label = "com.icloudbridge.server"
     private let fm = FileManager.default
     private let loginHelperIdentifier = "app.icloudbridge.loginhelper"
+    private let launchAgentPlist = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/LaunchAgents/com.icloudbridge.server.plist")
 
     private var currentUserIdentifier: String {
         let uid = getuid()
@@ -41,12 +43,18 @@ final class LaunchAgentManager {
         guard #available(macOS 13.0, *) else {
             throw LaunchAgentError.processFailed(message: "Start at Login requires macOS 13 or later.")
         }
-        try installWithSMAppService()
+        do {
+            try installWithSMAppService()
+        } catch LaunchAgentError.loginHelperMissing {
+            // Fallback for dev/bare builds: install a LaunchAgent for the menubar app itself.
+            try installLaunchAgentFallback()
+        }
     }
 
     func remove() throws {
         guard #available(macOS 13.0, *) else { return }
         try removeWithSMAppService()
+        try? removeLaunchAgentFallback()
     }
 
     @discardableResult
@@ -71,31 +79,31 @@ final class LaunchAgentManager {
         return task.terminationStatus
     }
 
-    private func backendExecutablePath() -> URL {
+    private func backendAssetsPresent() -> Bool {
         guard let resources = Bundle.main.resourceURL else {
-            return URL(fileURLWithPath: "/tmp/icloudbridge-backend")
+            return false
         }
 
-        // Prefer the top-level packaged backend (matches BackendProcessManager)
+        // Prefer the packaged backend binary (matches older builds)
         let primary = resources.appendingPathComponent("icloudbridge-backend")
         if FileManager.default.isExecutableFile(atPath: primary.path) {
-            return primary
+            return true
         }
 
         // Fallback to legacy backend/ path
         let legacy = resources.appendingPathComponent("backend/icloudbridge-backend")
         if FileManager.default.isExecutableFile(atPath: legacy.path) {
-            return legacy
+            return true
         }
 
-        // Development/testing escape hatch
-        return URL(fileURLWithPath: "/tmp/icloudbridge-backend")
+        // For current builds we ship backend_src + venv installer instead of a binary
+        let backendSrc = resources.appendingPathComponent("backend_src", isDirectory: true)
+        return FileManager.default.fileExists(atPath: backendSrc.path)
     }
 
     @available(macOS 13.0, *)
     private func installWithSMAppService() throws {
-        let backendPath = backendExecutablePath()
-        guard fm.isExecutableFile(atPath: backendPath.path) else {
+        guard backendAssetsPresent() else {
             throw LaunchAgentError.backendMissing
         }
 
@@ -114,6 +122,41 @@ final class LaunchAgentManager {
 
         let service = SMAppService.loginItem(identifier: loginHelperIdentifier)
         try service.register()
+    }
+
+    // Fallback: use a LaunchAgent pointing to the menubar app executable when the login helper is not bundled.
+    private func installLaunchAgentFallback() throws {
+        guard let appBundle = Bundle.main.bundleURL as URL? else {
+            throw LaunchAgentError.bundlePathMissing
+        }
+        let executable = appBundle
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("MacOS")
+            .appendingPathComponent(appBundle.deletingPathExtension().lastPathComponent)
+
+        guard fm.isExecutableFile(atPath: executable.path) else {
+            throw LaunchAgentError.backendMissing
+        }
+
+        let plist: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": [executable.path],
+            "RunAtLoad": true,
+            "KeepAlive": false,
+        ]
+
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: launchAgentPlist, options: .atomic)
+
+        try runLaunchctl(arguments: ["bootstrap", currentUserIdentifier, launchAgentPlist.path])
+        try runLaunchctl(arguments: ["enable", "\(currentUserIdentifier)/\(label)"])
+    }
+
+    private func removeLaunchAgentFallback() throws {
+        if fm.fileExists(atPath: launchAgentPlist.path) {
+            _ = try? runLaunchctl(arguments: ["bootout", currentUserIdentifier, launchAgentPlist.path])
+            try? fm.removeItem(at: launchAgentPlist)
+        }
     }
 
     @available(macOS 13.0, *)

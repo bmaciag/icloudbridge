@@ -83,7 +83,9 @@ def build_frontend() -> None:
 
 
 def build_menubar_binary() -> Path:
-    run(["swift", "build", "-c", "release"], cwd=MENUBAR_DIR)
+    # Build main menubar app and the login helper so it can be embedded for SMAppService.
+    run(["swift", "build", "-c", "release", "--product", "iCloudBridgeMenubar"], cwd=MENUBAR_DIR)
+    run(["swift", "build", "-c", "release", "--product", "iCloudBridgeLoginHelper"], cwd=MENUBAR_DIR)
     binary = MENUBAR_DIR / ".build" / "release" / "iCloudBridgeMenubar"
     if not binary.exists():
         raise FileNotFoundError(f"Menubar binary not found at {binary}")
@@ -187,6 +189,13 @@ def stage_app_bundle(version: str, menubar_binary: Path) -> None:
                     plistlib.dump(plist_data, fh)
             except Exception as exc:
                 print(f"WARNING: could not update helper Info.plist: {exc}")
+
+        # Copy app icon so the login item shows the right icon/name in System Settings
+        app_icon_source = ROOT / "macos" / "AppBundle" / "AppIcon.icns"
+        if app_icon_source.exists():
+            helper_resources = helper_app_dir / "Contents" / "Resources"
+            helper_resources.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(app_icon_source, helper_resources / "AppIcon.icns")
     else:
         print("WARNING: login helper binary not found; Background Items entry may be generic.")
 
