@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Settings as SettingsIcon, RefreshCw, Save, Trash2, FileText, Calendar, Key, Image, Download, Shield, AlertTriangle, ExternalLink, CheckCircle, Loader2, Database } from 'lucide-react';
+import { Settings as SettingsIcon, RefreshCw, Save, Trash2, FileText, Calendar, Key, Image, Download, Shield, AlertTriangle, AlertCircle, ExternalLink, CheckCircle, Loader2, Database } from 'lucide-react';
 import { useBeforeUnload, useBlocker, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -7,6 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
 import { FolderBrowserDialog } from '@/components/FolderBrowserDialog';
@@ -22,7 +23,12 @@ const PASSWORD_PROVIDERS: { value: PasswordProvider; label: string; helper: stri
   { value: 'nextcloud', label: 'Nextcloud Passwords', helper: 'Basic sync without OTP/passkey support' },
 ];
 
-const TRANSIENT_KEYS = new Set(['passwords_vaultwarden_password', 'passwords_nextcloud_app_password']);
+const TRANSIENT_KEYS = new Set([
+  'passwords_vaultwarden_password',
+  'passwords_vaultwarden_client_id',
+  'passwords_vaultwarden_client_secret',
+  'passwords_nextcloud_app_password'
+]);
 
 const stripTransientFields = (value: unknown): unknown => {
   if (Array.isArray(value)) {
@@ -75,6 +81,8 @@ export default function Settings() {
   const [passwordStatusLoading, setPasswordStatusLoading] = useState(false);
   const [vaultCredsLoading, setVaultCredsLoading] = useState(false);
   const [nextcloudCredsLoading, setNextcloudCredsLoading] = useState(false);
+  const [detectedProvider, setDetectedProvider] = useState<'bitwarden' | 'vaultwarden' | null>(null);
+  const [manualProviderSelection, setManualProviderSelection] = useState<'bitwarden' | 'vaultwarden'>('vaultwarden');
   const [showInitialScanModal, setShowInitialScanModal] = useState(false);
   const [initialScanProgress, setInitialScanProgress] = useState(0);
   const [initialScanMessage, setInitialScanMessage] = useState('');
@@ -114,6 +122,8 @@ export default function Settings() {
         ...data,
         passwords_provider: (data.passwords_provider as PasswordProvider) ?? 'vaultwarden',
         passwords_vaultwarden_password: '',
+        passwords_vaultwarden_client_id: '',
+        passwords_vaultwarden_client_secret: '',
         passwords_nextcloud_app_password: '',
       };
       setFormData(nextFormData);
@@ -136,12 +146,24 @@ export default function Settings() {
         ...config,
         passwords_provider: (config.passwords_provider as PasswordProvider) ?? 'vaultwarden',
         passwords_vaultwarden_password: '',
+        passwords_vaultwarden_client_id: '',
+        passwords_vaultwarden_client_secret: '',
         passwords_nextcloud_app_password: '',
       };
       setFormData(nextFormData);
       setSavedSnapshot(sanitizeConfigSnapshot(nextFormData));
     }
   }, [config]);
+
+  // Auto-detect provider based on URL
+  useEffect(() => {
+    const url = config?.passwords_vaultwarden_url?.toLowerCase() || '';
+    if (url.includes('bitwarden.com') || url.includes('bitwarden.eu')) {
+      setDetectedProvider('bitwarden');
+    } else if (url) {
+      setDetectedProvider(null);
+    }
+  }, [config?.passwords_vaultwarden_url]);
 
   useEffect(() => {
     if (blockerState === 'blocked') {
@@ -361,8 +383,29 @@ export default function Settings() {
   };
 
   const handleSaveVaultwardenCredentials = async () => {
-    if (!formData.passwords_vaultwarden_email || !formData.passwords_vaultwarden_password) {
-      setError('Enter both email and password to save VaultWarden credentials.');
+    if (!formData.passwords_vaultwarden_email) {
+      setError('Email is required to save credentials.');
+      return;
+    }
+
+    const email = formData.passwords_vaultwarden_email;
+    const password = formData.passwords_vaultwarden_password;
+    const clientId = formData.passwords_vaultwarden_client_id;
+    const clientSecret = formData.passwords_vaultwarden_client_secret;
+    const url = formData.passwords_vaultwarden_url;
+
+    // Determine effective provider and validation requirements
+    const effectiveProvider = detectedProvider || manualProviderSelection;
+    const isClientCredsRequired = effectiveProvider === 'bitwarden';
+
+    // Validate based on provider type
+    if (isClientCredsRequired && (!clientId || !clientSecret)) {
+      setError('Client ID and Secret are required for Bitwarden Cloud');
+      return;
+    }
+
+    if (clientId && !clientId.startsWith('user.')) {
+      setError('Client ID must start with "user." for Bitwarden Personal API Keys');
       return;
     }
 
@@ -371,13 +414,19 @@ export default function Settings() {
       setError(null);
       setSuccess(null);
       await apiClient.setVaultwardenCredentials(
-        formData.passwords_vaultwarden_email,
-        formData.passwords_vaultwarden_password,
-        undefined,
-        undefined,
-        formData.passwords_vaultwarden_url,
+        email,
+        password || undefined,  // undefined = no update (partial update support)
+        clientId || undefined,
+        clientSecret || undefined,
+        url,
       );
-      setFormData((prev) => ({ ...prev, passwords_vaultwarden_password: '' }));
+      // Clear transient fields after successful save
+      setFormData((prev) => ({
+        ...prev,
+        passwords_vaultwarden_password: '',
+        passwords_vaultwarden_client_id: '',
+        passwords_vaultwarden_client_secret: '',
+      }));
       await loadPasswordStatus();
       setSuccess('VaultWarden credentials saved securely.');
     } catch (err) {
@@ -954,7 +1003,7 @@ export default function Settings() {
             <div>
               <Label>Enable Reminders Sync</Label>
               <p className="text-sm text-muted-foreground">
-                Sync with CalDAV servers like Nextcloud or iCloud
+                Sync with Nextcloud or CalDAV servers
               </p>
             </div>
             <Switch
@@ -1247,6 +1296,35 @@ export default function Settings() {
                 </datalist>
               </div>
 
+              {detectedProvider === 'bitwarden' && (
+                <Alert className="mb-4">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>Bitwarden Cloud Detected</AlertTitle>
+                  <AlertDescription>
+                    Personal API Key (Client ID and Secret) required for Bitwarden Cloud authentication.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {!detectedProvider && formData.passwords_vaultwarden_url && (
+                <div className="space-y-2">
+                  <Label>Provider Type</Label>
+                  <RadioGroup
+                    value={manualProviderSelection}
+                    onValueChange={(v: string) => setManualProviderSelection(v as 'bitwarden' | 'vaultwarden')}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="bitwarden" id="settings-provider-bitwarden" />
+                      <Label htmlFor="settings-provider-bitwarden">Bitwarden (requires API keys)</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="vaultwarden" id="settings-provider-vaultwarden" />
+                      <Label htmlFor="settings-provider-vaultwarden">Vaultwarden (API keys optional)</Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+              )}
+
               <div className="space-y-2">
                 <Label htmlFor="vw-email">Bitwarden/Vaultwarden Email</Label>
                 <Input
@@ -1261,7 +1339,7 @@ export default function Settings() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="vw-password">Bitwarden/Vaultwarden Password</Label>
+                <Label htmlFor="vw-password">Bitwarden/Vaultwarden Master Password</Label>
                 <Input
                   id="vw-password"
                   type="password"
@@ -1271,32 +1349,63 @@ export default function Settings() {
                     setFormData({ ...formData, passwords_vaultwarden_password: e.target.value })
                   }
                 />
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={handleSaveVaultwardenCredentials}
-                    disabled={
-                      vaultCredsLoading ||
-                      !formData.passwords_vaultwarden_email ||
-                      !formData.passwords_vaultwarden_password
-                    }
-                  >
-                    {vaultCredsLoading ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    ) : (
-                      <CheckCircle className="w-4 h-4 mr-2" />
-                    )}
-                    Save Credentials
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    onClick={handleDeleteVaultwardenCredentials}
-                    disabled={vaultCredsLoading || !passwordStatus?.has_vaultwarden_credentials}
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Delete Stored Credentials
-                  </Button>
-                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="vw-client-id">
+                  Client ID {(detectedProvider || manualProviderSelection) === 'bitwarden' && <span className="text-red-500">*</span>}
+                </Label>
+                <Input
+                  id="vw-client-id"
+                  value={formData.passwords_vaultwarden_client_id || ''}
+                  onChange={(e) =>
+                    setFormData({ ...formData, passwords_vaultwarden_client_id: e.target.value })
+                  }
+                  placeholder={(detectedProvider || manualProviderSelection) === 'bitwarden' ? "user.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" : "Optional"}
+                />
+                {(detectedProvider || manualProviderSelection) === 'bitwarden' && (
+                  <p className="text-sm text-muted-foreground">
+                    Get your Personal API Key from Bitwarden Settings → Security → Keys
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="vw-client-secret">
+                  Client Secret {(detectedProvider || manualProviderSelection) === 'bitwarden' && <span className="text-red-500">*</span>}
+                </Label>
+                <Input
+                  id="vw-client-secret"
+                  type="password"
+                  value={formData.passwords_vaultwarden_client_secret || ''}
+                  onChange={(e) =>
+                    setFormData({ ...formData, passwords_vaultwarden_client_secret: e.target.value })
+                  }
+                  placeholder={(detectedProvider || manualProviderSelection) === 'bitwarden' ? "Required" : "Optional"}
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  onClick={handleSaveVaultwardenCredentials}
+                  disabled={vaultCredsLoading || !formData.passwords_vaultwarden_email}
+                >
+                  {vaultCredsLoading ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                  )}
+                  Save Credentials
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={handleDeleteVaultwardenCredentials}
+                  disabled={vaultCredsLoading || !passwordStatus?.has_vaultwarden_credentials}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete Stored Credentials
+                </Button>
               </div>
             </>
           )}

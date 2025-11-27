@@ -137,6 +137,14 @@ class ConfigUpdateRequest(BaseModel):
         default=None,
         description="Password will be stored in system keyring",
     )
+    passwords_vaultwarden_client_id: str | None = Field(
+        default=None,
+        description="OAuth client ID (Personal API Key) will be stored in system keyring",
+    )
+    passwords_vaultwarden_client_secret: str | None = Field(
+        default=None,
+        description="OAuth client secret (Personal API Key) will be stored in system keyring",
+    )
     passwords_nextcloud_url: str | None = None
     passwords_nextcloud_username: str | None = None
     passwords_nextcloud_app_password: str | None = Field(

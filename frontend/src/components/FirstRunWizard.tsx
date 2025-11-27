@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { CheckCircle, ArrowRight, ArrowLeft, Loader2, FileText, Calendar, Key, Download, Shield, AlertTriangle, ExternalLink, Image as ImageIcon } from 'lucide-react';
+import { CheckCircle, ArrowRight, ArrowLeft, Loader2, FileText, Calendar, Key, Download, Shield, AlertTriangle, AlertCircle, ExternalLink, Image as ImageIcon } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import {
   Dialog,
@@ -13,7 +13,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Progress } from '@/components/ui/progress';
 import { FolderBrowserDialog } from '@/components/FolderBrowserDialog';
 import { useAppStore } from '@/store/app-store';
@@ -93,6 +94,8 @@ export default function FirstRunWizard() {
     passwords_vaultwarden_url: '',
     passwords_vaultwarden_email: '',
     passwords_vaultwarden_password: '',
+    passwords_vaultwarden_client_id: '',
+    passwords_vaultwarden_client_secret: '',
     passwords_nextcloud_url: '',
     passwords_nextcloud_username: '',
     passwords_nextcloud_app_password: '',
@@ -109,6 +112,24 @@ export default function FirstRunWizard() {
     },
     data_dir: '~/.icloudbridge',
   });
+
+  // Provider detection state
+  const [detectedProvider, setDetectedProvider] = useState<'bitwarden' | 'vaultwarden' | null>(null);
+  const [manualProviderSelection, setManualProviderSelection] = useState<'bitwarden' | 'vaultwarden'>('vaultwarden');
+
+  // Auto-detect provider based on URL
+  useEffect(() => {
+    const url = formData.passwords_vaultwarden_url?.toLowerCase() || '';
+    if (url.includes('bitwarden.com') || url.includes('bitwarden.eu')) {
+      setDetectedProvider('bitwarden');
+    } else if (url) {
+      setDetectedProvider(null); // Show manual selection
+    }
+  }, [formData.passwords_vaultwarden_url]);
+
+  // Determine effective provider and whether client credentials are required
+  const effectiveProvider = detectedProvider || manualProviderSelection;
+  const isClientCredsRequired = effectiveProvider === 'bitwarden';
 
   const passwordProvider: PasswordProvider = (formData.passwords_provider as PasswordProvider) ?? 'vaultwarden';
   const needsConnectionTest = useMemo(
@@ -172,6 +193,12 @@ export default function FirstRunWizard() {
         configUpdate.passwords_vaultwarden_url = formData.passwords_vaultwarden_url;
         configUpdate.passwords_vaultwarden_email = formData.passwords_vaultwarden_email;
         configUpdate.passwords_vaultwarden_password = formData.passwords_vaultwarden_password;
+        if (formData.passwords_vaultwarden_client_id) {
+          configUpdate.passwords_vaultwarden_client_id = formData.passwords_vaultwarden_client_id;
+        }
+        if (formData.passwords_vaultwarden_client_secret) {
+          configUpdate.passwords_vaultwarden_client_secret = formData.passwords_vaultwarden_client_secret;
+        }
       }
     } else {
       configUpdate.passwords_enabled = false;
@@ -348,6 +375,45 @@ export default function FirstRunWizard() {
   };
 
   const handleNext = () => {
+    // Validate passwords step before proceeding
+    if (STEPS[currentStep].id === 'passwords') {
+      const passwordsEnabled = formData.passwords_enabled ?? false;
+      const passwordProvider = formData.passwords_provider || 'vaultwarden';
+
+      if (passwordsEnabled && passwordProvider === 'vaultwarden') {
+        const url = formData.passwords_vaultwarden_url;
+        const email = formData.passwords_vaultwarden_email;
+        const password = formData.passwords_vaultwarden_password;
+        const clientId = formData.passwords_vaultwarden_client_id;
+        const clientSecret = formData.passwords_vaultwarden_client_secret;
+
+        // Basic validation - URL, email, and password are always required
+        if (!url || !email || !password) {
+          setError('Please fill in all required fields (URL, Email, and Master Password)');
+          return;
+        }
+
+        // Determine if this is Bitwarden (auto-detected or manually selected)
+        const urlLower = url.toLowerCase();
+        const isAutoDetectedBitwarden = urlLower.includes('bitwarden.com') || urlLower.includes('bitwarden.eu');
+        const isManualBitwarden = !isAutoDetectedBitwarden && detectedProvider === null && manualProviderSelection === 'bitwarden';
+        const isBitwarden = isAutoDetectedBitwarden || isManualBitwarden;
+
+        // Bitwarden-specific validation
+        if (isBitwarden) {
+          if (!clientId || !clientSecret) {
+            setError('Client ID and Secret are required for Bitwarden Cloud');
+            return;
+          }
+          if (!clientId.startsWith('user.')) {
+            setError('Client ID must start with "user." for Bitwarden Personal API Keys');
+            return;
+          }
+        }
+      }
+    }
+
+    // Validation passed or not on passwords step - proceed
     if (currentStep < STEPS.length - 1) {
       setCurrentStep(currentStep + 1);
       setError(null);
@@ -797,7 +863,7 @@ export default function FirstRunWizard() {
                 <div>
                   <Label>Enable Reminders Sync</Label>
                   <p className="text-sm text-muted-foreground">
-                    Sync with CalDAV servers like Nextcloud or iCloud
+                    Sync with Nextcloud or CalDAV servers
                   </p>
                 </div>
                 <Switch
@@ -1021,6 +1087,32 @@ export default function FirstRunWizard() {
 
               {formData.passwords_enabled && passwordProvider === 'vaultwarden' && (
                 <>
+                  {detectedProvider === 'bitwarden' && (
+                    <Alert className="mb-4">
+                      <AlertCircle className="h-4 w-4" />
+                      <AlertTitle>Bitwarden Cloud Detected</AlertTitle>
+                      <AlertDescription>
+                        Personal API Key (Client ID and Secret) required for Bitwarden Cloud authentication.
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {!detectedProvider && formData.passwords_vaultwarden_url && (
+                    <div className="mb-4 space-y-2">
+                      <Label>Provider Type</Label>
+                      <RadioGroup value={manualProviderSelection} onValueChange={(v: string) => setManualProviderSelection(v as 'bitwarden' | 'vaultwarden')}>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="bitwarden" id="wizard-provider-bitwarden" />
+                          <Label htmlFor="wizard-provider-bitwarden">Bitwarden (requires API keys)</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="vaultwarden" id="wizard-provider-vaultwarden" />
+                          <Label htmlFor="wizard-provider-vaultwarden">Vaultwarden (API keys optional)</Label>
+                        </div>
+                      </RadioGroup>
+                    </div>
+                  )}
+
                   <div className="space-y-2">
                     <Label htmlFor="wizard-vw-url">Bitwarden/Vaultwarden URL</Label>
                     <Input
@@ -1062,6 +1154,42 @@ export default function FirstRunWizard() {
                       onChange={(e) =>
                         setFormData({ ...formData, passwords_vaultwarden_password: e.target.value })
                       }
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="wizard-vw-client-id">
+                      Client ID {isClientCredsRequired && <span className="text-red-500">*</span>}
+                    </Label>
+                    <Input
+                      id="wizard-vw-client-id"
+                      name="passwords_vaultwarden_client_id"
+                      value={formData.passwords_vaultwarden_client_id || ''}
+                      onChange={(e) =>
+                        setFormData({ ...formData, passwords_vaultwarden_client_id: e.target.value })
+                      }
+                      placeholder={isClientCredsRequired ? "user.xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" : "Optional"}
+                    />
+                    {isClientCredsRequired && (
+                      <p className="text-sm text-muted-foreground">
+                        Get your Personal API Key from Bitwarden Settings → Security → Keys
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="wizard-vw-client-secret">
+                      Client Secret {isClientCredsRequired && <span className="text-red-500">*</span>}
+                    </Label>
+                    <Input
+                      id="wizard-vw-client-secret"
+                      name="passwords_vaultwarden_client_secret"
+                      type="password"
+                      value={formData.passwords_vaultwarden_client_secret || ''}
+                      onChange={(e) =>
+                        setFormData({ ...formData, passwords_vaultwarden_client_secret: e.target.value })
+                      }
+                      placeholder={isClientCredsRequired ? "Required" : "Optional"}
                     />
                   </div>
                 </>

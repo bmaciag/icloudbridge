@@ -65,6 +65,8 @@ export interface AppConfig {
   passwords_vaultwarden_url?: string;
   passwords_vaultwarden_email?: string;
   passwords_vaultwarden_password?: string;
+  passwords_vaultwarden_client_id?: string;
+  passwords_vaultwarden_client_secret?: string;
   passwords_nextcloud_url?: string;
   passwords_nextcloud_username?: string;
   passwords_nextcloud_app_password?: string;

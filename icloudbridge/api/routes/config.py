@@ -191,15 +191,37 @@ async def update_config(update: ConfigUpdateRequest, config: ConfigDep):
         config.passwords.vaultwarden_url = update.passwords_vaultwarden_url
     if update.passwords_vaultwarden_email is not None:
         config.passwords.vaultwarden_email = update.passwords_vaultwarden_email
-    if update.passwords_vaultwarden_password is not None and update.passwords_vaultwarden_password != "":
-        # Store password in keyring
+    # Handle VaultWarden credentials (password, client_id, client_secret)
+    # Support partial updates: can update any field without re-entering others
+    if (update.passwords_vaultwarden_password is not None and update.passwords_vaultwarden_password != "") or \
+       update.passwords_vaultwarden_client_id is not None or \
+       update.passwords_vaultwarden_client_secret is not None:
         try:
             email = update.passwords_vaultwarden_email or config.passwords.vaultwarden_email
             if not email:
-                raise ValueError("VaultWarden email is required to store password")
+                raise ValueError("VaultWarden email is required to store credentials")
+
+            # Fetch existing credentials for partial updates
+            existing_creds = None
+            try:
+                existing_creds = credential_store.get_vaultwarden_credentials(email)
+            except Exception:
+                pass  # No existing credentials
+
+            # Merge new with existing (preserve existing if new is None/empty)
+            password = update.passwords_vaultwarden_password if update.passwords_vaultwarden_password else \
+                       (existing_creds.get("password") if existing_creds else None)
+            client_id = update.passwords_vaultwarden_client_id if update.passwords_vaultwarden_client_id is not None else \
+                        (existing_creds.get("client_id") if existing_creds else None)
+            client_secret = update.passwords_vaultwarden_client_secret if update.passwords_vaultwarden_client_secret is not None else \
+                            (existing_creds.get("client_secret") if existing_creds else None)
+
+            # Store merged credentials
             credential_store.set_vaultwarden_credentials(
                 email=email,
-                password=update.passwords_vaultwarden_password,
+                password=password,
+                client_id=client_id,
+                client_secret=client_secret,
             )
             logger.info(f"VaultWarden credentials stored in keyring for: {email}")
         except Exception as e:

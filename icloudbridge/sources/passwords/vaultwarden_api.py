@@ -5,6 +5,7 @@ import hashlib
 import logging
 import unicodedata
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from argon2.low_level import Type, hash_secret_raw
@@ -27,6 +28,8 @@ class VaultwardenAPIClient:
     Uses the Bitwarden REST API directly for cipher (password) operations.
     """
 
+    BITWARDEN_WEB_CLIENT_VERSION = "2025.11.0"  # Keep aligned with Bitwarden web releases
+
     def __init__(
         self,
         url: str,
@@ -48,17 +51,47 @@ class VaultwardenAPIClient:
         self.url = url.rstrip("/")
         self.email = email
         self.password = password
-        self.client_id = client_id or "web"
+        parsed = urlparse(self.url)
+        host = parsed.hostname or ""
+        scheme = parsed.scheme or "https"
+
+        host_is_bitwarden = host.endswith("bitwarden.com") or host.endswith("bitwarden.eu")
+
+        # Allow override via config. Bitwarden cloud expects the public "web" client id;
+        # Vaultwarden/self-hosted works with "browser".
+        if client_id:
+            self.client_id = client_id
+        elif host_is_bitwarden:
+            self.client_id = "web"
+        else:
+            self.client_id = "browser"
         self.client_secret = client_secret
         self.access_token: str | None = None
         normalized_email = self.email.strip().lower()
         self._normalized_email = normalized_email
         self._normalized_password = unicodedata.normalize("NFKC", self.password)
 
+        # Bitwarden cloud splits identity/api across subdomains; Vaultwarden keeps them together.
+        if host.endswith("bitwarden.com") or host.endswith("bitwarden.eu"):
+            base_domain = ".".join(host.split(".")[-2:])
+            self.identity_base = f"{scheme}://identity.{base_domain}"
+            # Use vault subdomain for API calls (api.bitwarden.* is for organization API only)
+            # Personal API keys and user vault access use vault.bitwarden.*
+            self.api_base = f"{scheme}://vault.{base_domain}"
+        else:
+            self.identity_base = f"{self.url}/identity"
+            self.api_base = self.url
+
         seed = f"{normalized_email}:{self.client_id or 'web'}"
         self.device_identifier = hashlib.sha256(seed.encode()).hexdigest()
-        self.device_type = 12  # web client
-        self._client = httpx.AsyncClient(timeout=30.0)
+        # Keep deterministic device identifier; use browser device type (Bitwarden public client).
+        self.device_type = 2
+        default_headers: dict[str, str] = {}
+        if host_is_bitwarden:
+            default_headers["Bitwarden-Client-Name"] = "web"
+            default_headers["Bitwarden-Client-Version"] = self.BITWARDEN_WEB_CLIENT_VERSION
+
+        self._client = httpx.AsyncClient(timeout=30.0, headers=default_headers)
         self._master_key: bytes | None = None
         self._user_key: bytes | None = None
 
@@ -66,30 +99,53 @@ class VaultwardenAPIClient:
         """
         Authenticate with VaultWarden server using Bitwarden Identity API.
 
+        Supports two authentication methods:
+        1. Personal API Key (client_credentials grant) - recommended for Bitwarden Cloud
+        2. Username/Password (password grant) - for self-hosted Vaultwarden
+
         Raises:
             Exception: If authentication fails
         """
-        logger.info(f"Authenticating with VaultWarden at {self.url}")
+        logger.info(
+            "Authenticating with VaultWarden at %s (identity=%s)", self.url, self.identity_base
+        )
 
         try:
-            # Bitwarden uses OAuth2 password grant
-            auth_url = f"{self.url}/identity/connect/token"
+            auth_url = f"{self.identity_base}/connect/token"
 
-            password_b64 = await self._derive_password_key()
+            # Check if using Personal API Key (client_id format: "user.xxxxx")
+            is_api_key = self.client_id and self.client_id.startswith("user.")
 
-            data = {
-                "grant_type": "password",
-                "username": self.email,
-                "password": password_b64,
-                "scope": "api offline_access",
-                "client_id": self.client_id,
-                "deviceIdentifier": self.device_identifier,
-                "deviceType": str(self.device_type),
-                "deviceName": "iCloudBridge",
-            }
+            if is_api_key and self.client_secret:
+                # Use client_credentials grant for Personal API Keys
+                logger.info("Using Personal API Key authentication (client_credentials grant)")
+                data = {
+                    "grant_type": "client_credentials",
+                    "scope": "api",
+                    "client_id": self.client_id,
+                    "client_secret": self.client_secret,
+                    "deviceIdentifier": self.device_identifier,
+                    "deviceType": str(self.device_type),
+                    "deviceName": "iCloudBridge",
+                }
+            else:
+                # Use password grant for username/password authentication
+                logger.info("Using password authentication (password grant)")
+                password_b64 = await self._derive_password_key()
 
-            if self.client_secret:
-                data["client_secret"] = self.client_secret
+                data = {
+                    "grant_type": "password",
+                    "username": self.email,
+                    "password": password_b64,
+                    "scope": "api offline_access",
+                    "client_id": self.client_id,
+                    "deviceIdentifier": self.device_identifier,
+                    "deviceType": str(self.device_type),
+                    "deviceName": "iCloudBridge",
+                }
+
+                if self.client_secret:
+                    data["client_secret"] = self.client_secret
 
             response = await self._client.post(auth_url, data=data)
             response.raise_for_status()
@@ -153,32 +209,36 @@ class VaultwardenAPIClient:
     async def _get_kdf_parameters(self) -> dict[str, Any]:
         """Fetch user-specific KDF settings from VaultWarden."""
 
-        prelogin_url = f"{self.url}/identity/accounts/prelogin"
-        payload = {"email": self.email, "scope": "api offline_access"}
+        primary_prelogin = f"{self.identity_base}/connect/prelogin"
+        fallback_prelogin = f"{self.identity_base}/accounts/prelogin"
+        payload = {"email": self.email}
 
-        try:
-            response = await self._client.post(prelogin_url, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            normalized = {k.lower(): v for k, v in data.items() if isinstance(k, str)}
-            if "kdf" not in normalized:
-                logger.warning("Prelogin response missing Kdf; falling back to defaults: %s", data)
-                return {"Kdf": 0, "KdfIterations": 100000}
-            return {
-                "Kdf": normalized.get("kdf", 0),
-                "KdfIterations": normalized.get("kdfiterations") or normalized.get("kdf_iterations"),
-                "KdfMemory": normalized.get("kdfmemory") or normalized.get("kdf_memory"),
-                "KdfParallelism": normalized.get("kdfparallelism") or normalized.get("kdf_parallelism"),
-            }
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                logger.warning("VaultWarden prelogin endpoint not found; assuming PBKDF2 defaults")
-                return {"Kdf": 0, "KdfIterations": 100000}
-            logger.error(f"Prelogin request failed: {exc.response.text}")
-            raise
-        except Exception as exc:
-            logger.error(f"Failed to fetch KDF parameters: {exc}")
-            return {"Kdf": 0, "KdfIterations": 100000}
+        for url in (primary_prelogin, fallback_prelogin):
+            try:
+                response = await self._client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                normalized = {k.lower(): v for k, v in data.items() if isinstance(k, str)}
+                if "kdf" not in normalized:
+                    logger.warning("Prelogin response missing Kdf; falling back to defaults: %s", data)
+                    return {"Kdf": 0, "KdfIterations": 100000}
+                return {
+                    "Kdf": normalized.get("kdf", 0),
+                    "KdfIterations": normalized.get("kdfiterations") or normalized.get("kdf_iterations"),
+                    "KdfMemory": normalized.get("kdfmemory") or normalized.get("kdf_memory"),
+                    "KdfParallelism": normalized.get("kdfparallelism") or normalized.get("kdf_parallelism"),
+                }
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    logger.debug("Prelogin endpoint %s not found; trying fallback", url)
+                    continue
+                logger.error("Prelogin request failed (%s): %s", url, exc.response.text)
+                raise
+            except Exception as exc:
+                logger.error("Failed to fetch KDF parameters from %s: %s", url, exc)
+                continue
+
+        return {"Kdf": 0, "KdfIterations": 100000}
 
     def _ensure_authenticated(self) -> None:
         """Ensure client is authenticated before making API calls."""
@@ -212,7 +272,7 @@ class VaultwardenAPIClient:
             user_key = await self._ensure_user_key()
 
             # Use Bitwarden sync API to get all data
-            sync_url = f"{self.url}/api/sync"
+            sync_url = f"{self.api_base}/api/sync"
             response = await self._client.get(sync_url, headers=self._get_headers())
             response.raise_for_status()
 
@@ -418,7 +478,7 @@ class VaultwardenAPIClient:
 
         try:
             user_key = await self._ensure_user_key()
-            folders_url = f"{self.url}/api/folders"
+            folders_url = f"{self.api_base}/api/folders"
             response = await self._client.get(folders_url, headers=self._get_headers())
             response.raise_for_status()
 
@@ -452,7 +512,7 @@ class VaultwardenAPIClient:
 
         try:
             user_key = await self._ensure_user_key()
-            folders_url = f"{self.url}/api/folders"
+            folders_url = f"{self.api_base}/api/folders"
             payload = {"name": encrypt_string(name, user_key)}
 
             response = await self._client.post(
@@ -521,7 +581,7 @@ class VaultwardenAPIClient:
         return cipher_data
 
     async def _post_cipher_payload(self, payload: dict[str, Any]) -> None:
-        ciphers_url = f"{self.url}/api/ciphers"
+        ciphers_url = f"{self.api_base}/api/ciphers"
         response = await self._client.post(
             ciphers_url, headers=self._get_headers(), json=payload
         )
@@ -558,7 +618,7 @@ class VaultwardenAPIClient:
             "folders": folders_payload,
             "folderRelationships": relationships,
         }
-        import_url = f"{self.url}/api/ciphers/import"
+        import_url = f"{self.api_base}/api/ciphers/import"
         response = await self._client.post(
             import_url, headers=self._get_headers(), json=import_body
         )
@@ -567,10 +627,18 @@ class VaultwardenAPIClient:
     async def _ensure_user_key(self) -> bytes:
         if self._user_key is not None:
             return self._user_key
+
+        # If we don't have a master key yet (e.g., used API key auth), derive it now
+        # Note: Even with Personal API Key authentication, we still need the master
+        # password to decrypt vault contents (API key only authenticates to Bitwarden)
+        if self._master_key is None:
+            logger.debug("Master key not cached, deriving from password for vault decryption")
+            await self._derive_password_key()
+
         if self._master_key is None:
             raise RuntimeError("Master key not available; authenticate first")
 
-        profile_url = f"{self.url}/api/accounts/profile"
+        profile_url = f"{self.api_base}/api/accounts/profile"
         response = await self._client.get(profile_url, headers=self._get_headers())
         response.raise_for_status()
         profile = response.json()

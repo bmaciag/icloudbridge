@@ -434,7 +434,7 @@ class APIClient {
 
   async setVaultwardenCredentials(
     email: string,
-    password: string,
+    password?: string,
     clientId?: string,
     clientSecret?: string,
     url?: string,
