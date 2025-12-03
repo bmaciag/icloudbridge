@@ -39,6 +39,11 @@ Once all shortcuts are installed, you can click "Refresh Status" to verify.
 
 ![First-Run Wizard - Notes Shortcuts Installed](images/docs_frw_notes4.png)
 
+> [!NOTE]
+> To work properly, you should allow Shortcuts to delete data. This is what allows iCloudBridge to update your notes when you make changes remotely. To enable, this go to Apple Shortcuts > Settings > Advanced and Enable "Allow Running Scripts" and "Allow Deleting Without Confirmation"
+
+![First-Run Wizard - Notes Shortcuts Installed](images/docs_frw_notes4_1.png)
+
 Next, we need to make sure iCloudBridge has permission to read your Apple Notes database. 
 
 ![First-Run Wizard - Notes Permissions Request](images/docs_frw_notes5.png)
