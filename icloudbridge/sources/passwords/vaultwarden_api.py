@@ -512,6 +512,47 @@ class VaultwardenAPIClient:
             logger.error(f"Failed to delete cipher {cipher_id}: {e}")
             return False
 
+    async def update_password(
+        self, cipher_id: str, entry: PasswordEntry, folder_mapping: dict[str, str] | None = None
+    ) -> bool:
+        """
+        Update an existing cipher (password entry) in VaultWarden.
+
+        Args:
+            cipher_id: The cipher ID to update
+            entry: Updated PasswordEntry
+            folder_mapping: Optional folder name to ID mapping
+
+        Returns:
+            True if successful, False otherwise
+
+        Raises:
+            RuntimeError: If not authenticated
+        """
+        self._ensure_authenticated()
+
+        try:
+            user_key = await self._ensure_user_key()
+            payload = self._build_cipher_payload(entry, folder_mapping, user_key, include_folder_id=True)
+
+            update_url = f"{self.api_base}/api/ciphers/{cipher_id}"
+            response = await self._client.put(
+                update_url, headers=self._get_headers(), json=payload
+            )
+            response.raise_for_status()
+            logger.info(f"Updated cipher: {cipher_id} ({entry.title})")
+            return True
+
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Failed to update cipher {cipher_id}: HTTP {e.response.status_code}"
+            )
+            logger.error(f"Response: {e.response.text}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to update cipher {cipher_id}: {e}")
+            return False
+
     async def list_folders(self) -> list[dict[str, str]]:
         """
         List all folders in VaultWarden.

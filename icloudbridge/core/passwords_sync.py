@@ -441,6 +441,8 @@ class PasswordsSyncEngine:
 
         all_keys = set(apple_map.keys()) | set(provider_map.keys()) | set(mappings.keys())
 
+        logger.debug(f"Sync plan: {len(apple_map)} apple entries, {len(provider_map)} provider entries, {len(mappings)} mappings")
+
         for key in all_keys:
             apple = apple_map.get(key)
             provider = provider_map.get(key)
@@ -453,13 +455,20 @@ class PasswordsSyncEngine:
 
                 # Sub-case 1a: Both still exist
                 if apple_exists and provider_exists:
-                    apple_changed = (
-                        apple.get_password_hash() != mapping.get("last_apple_hash")
-                    )
-                    provider_changed = (
-                        provider.get_password_hash()
-                        != mapping.get("last_provider_hash")
-                    )
+                    apple_hash = apple.get_password_hash()
+                    provider_hash = provider.get_password_hash()
+                    last_apple_hash = mapping.get("last_apple_hash")
+                    last_provider_hash = mapping.get("last_provider_hash")
+
+                    apple_changed = apple_hash != last_apple_hash
+                    provider_changed = provider_hash != last_provider_hash
+
+                    if apple_changed or provider_changed:
+                        logger.debug(
+                            f"Change detected for '{key[0]}': "
+                            f"apple_hash={apple_hash[:8]}..., last_apple_hash={last_apple_hash[:8] if last_apple_hash else 'None'}..., "
+                            f"apple_changed={apple_changed}, provider_changed={provider_changed}"
+                        )
 
                     if apple_changed and provider_changed:
                         # CONFLICT: Both modified
@@ -513,6 +522,16 @@ class PasswordsSyncEngine:
                     # New in provider → create in Apple
                     plan["create_apple"].append(provider)
 
+        logger.info(
+            f"Sync plan result: create_provider={len(plan['create_provider'])}, "
+            f"update_provider={len(plan['update_provider'])}, "
+            f"delete_provider={len(plan['delete_provider'])}, "
+            f"create_apple={len(plan['create_apple'])}, "
+            f"update_apple={len(plan['update_apple'])}, "
+            f"delete_apple={len(plan['delete_apple'])}, "
+            f"conflicts={len(plan['conflicts'])}, "
+            f"unchanged={len(plan['unchanged'])}"
+        )
         return plan
 
     async def _resolve_conflict(
@@ -693,6 +712,7 @@ class PasswordsSyncEngine:
 
         # Execute deletions (Apple deleted → delete from provider)
         deleted_count = 0
+        updated_count = 0
         for key, provider_entry, mapping in sync_plan["delete_provider"]:
             if not simulate:
                 provider_id = mapping.get("provider_id") if mapping else (provider_entry.provider_id if provider_entry else None)
@@ -750,6 +770,33 @@ class PasswordsSyncEngine:
                 except Exception as e:
                     logger.error(f"Error creating {key[0]} in provider: {e}")
 
+            elif action == "update_provider":
+                if not simulate:
+                    provider_id = mapping.get("provider_id") if mapping else (provider_entry.provider_id if provider_entry else None)
+                    if provider_id and apple:
+                        try:
+                            success = await provider.update_password(provider_id, apple)
+                            if success:
+                                await self.db.upsert_password_mapping(
+                                    title=apple.title,
+                                    username=apple.username,
+                                    provider_id=provider_id,
+                                    provider_type=provider_type,
+                                    last_apple_hash=apple.get_password_hash(),
+                                    last_provider_hash=apple.get_password_hash(),
+                                    url=apple.url,
+                                )
+                                updated_count += 1
+                                logger.info(f"Conflict resolved: updated {key[0]} in provider")
+                            else:
+                                logger.warning(f"Conflict resolution failed: could not update {key[0]} in provider")
+                        except Exception as e:
+                            logger.error(f"Error updating {key[0]} in provider: {e}")
+                    else:
+                        logger.warning(f"Cannot update {key[0]} in provider: no provider_id or apple entry")
+                else:
+                    updated_count += 1
+
             elif action == "delete_apple" and not simulate:
                 try:
                     # Can't delete from Apple automatically - just remove mapping
@@ -764,6 +811,37 @@ class PasswordsSyncEngine:
                 logger.info(f"Conflict resolved: {key[0]} will be pulled to Apple in pull phase")
 
         logger.info(f"Push phase deletions: {deleted_count} entries deleted from provider")
+
+        # Execute updates (Apple password changed → update provider)
+        for key, apple_entry, provider_entry, mapping in sync_plan["update_provider"]:
+            if not simulate:
+                provider_id = mapping.get("provider_id") if mapping else (provider_entry.provider_id if provider_entry else None)
+                if provider_id:
+                    try:
+                        success = await provider.update_password(provider_id, apple_entry)
+                        if success:
+                            # Update the mapping with new hashes
+                            await self.db.upsert_password_mapping(
+                                title=apple_entry.title,
+                                username=apple_entry.username,
+                                provider_id=provider_id,
+                                provider_type=provider_type,
+                                last_apple_hash=apple_entry.get_password_hash(),
+                                last_provider_hash=apple_entry.get_password_hash(),
+                                url=apple_entry.url,
+                            )
+                            updated_count += 1
+                            logger.info(f"Updated password in provider: {apple_entry.title}")
+                        else:
+                            logger.warning(f"Failed to update password in provider: {apple_entry.title}")
+                    except Exception as e:
+                        logger.error(f"Error updating {apple_entry.title} in provider: {e}")
+                else:
+                    logger.warning(f"No provider_id for {key[0]}, cannot update")
+            else:
+                updated_count += 1
+
+        logger.info(f"Push phase updates: {updated_count} entries updated in provider")
 
         entries_by_key: dict[tuple[str, str], PasswordEntry] = {}
         for db_entry in apple_db_entries:
@@ -842,8 +920,9 @@ class PasswordsSyncEngine:
                 "errors": [],
             }
             logger.info(
-                "Simulation: %s new, %s already exist",
+                "Simulation: %s new, %s updates, %s already exist",
                 len(entries_that_will_be_created),
+                updated_count,
                 len(entries_to_push) - len(entries_that_will_be_created),
             )
         elif bulk_push:
@@ -1010,6 +1089,7 @@ class PasswordsSyncEngine:
             "import": import_stats,
             "queued": len(entries_to_push),
             "created": push_stats.get("created") if isinstance(push_stats, dict) else push_stats,
+            "updated": updated_count,
             "skipped": push_stats.get("skipped") if isinstance(push_stats, dict) else 0,
             "failed": push_stats.get("failed") if isinstance(push_stats, dict) else 0,
             "errors": push_stats.get("errors") if isinstance(push_stats, dict) else [],

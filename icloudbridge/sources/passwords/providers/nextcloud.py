@@ -281,13 +281,16 @@ class NextcloudPasswordsProvider(PasswordProviderBase):
             logger.error(f"Failed to parse create password response: {e}")
             raise
 
-    async def update_password(self, password_id: str, entry: PasswordEntry) -> None:
+    async def update_password(self, password_id: str, entry: PasswordEntry) -> bool:
         """
         Update an existing password entry.
 
         Args:
             password_id: Password UUID
             entry: Updated PasswordEntry
+
+        Returns:
+            True if successful, False otherwise
         """
         logger.debug(f"Updating password {password_id}: {entry.title}")
 
@@ -341,20 +344,25 @@ class NextcloudPasswordsProvider(PasswordProviderBase):
                 logger.warning(
                     "password/update endpoint returned 405; falling back to legacy password endpoint."
                 )
-                response = await self._client.post(
-                    f"{self.api_base}/password",
-                    json=payload,
-                )
-                response.raise_for_status()
+                try:
+                    response = await self._client.post(
+                        f"{self.api_base}/password",
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                except Exception as fallback_e:
+                    logger.error(f"Failed to update password (fallback): {fallback_e}")
+                    return False
             else:
                 logger.error(f"Failed to update password: HTTP {e.response.status_code}")
                 logger.error(f"Response: {e.response.text}")
-                raise
+                return False
         except Exception as e:
             logger.error(f"Failed to update password: {e}")
-            raise
+            return False
 
         logger.debug(f"Updated password {password_id}")
+        return True
 
     async def delete_password(self, password_id: str) -> None:
         """

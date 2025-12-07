@@ -71,7 +71,7 @@ function SyncStatsView({ result, providerLabel }: { result: PasswordsSyncRespons
   }
 
   const { stats } = result;
-  const hasPushStats = stats.push && (stats.push.created > 0 || stats.push.skipped > 0 || stats.push.failed > 0 || stats.push.deleted > 0);
+  const hasPushStats = stats.push && (stats.push.created > 0 || stats.push.updated > 0 || stats.push.skipped > 0 || stats.push.failed > 0 || stats.push.deleted > 0);
   const hasPullStats = stats.pull && (stats.pull.new_entries > 0 || stats.pull.deleted > 0);
 
   if (!hasPushStats && !hasPullStats) {
@@ -118,7 +118,7 @@ function SyncStatsView({ result, providerLabel }: { result: PasswordsSyncRespons
                   </div>
                   <div className="rounded-md bg-muted/50 p-2">
                     <p className="text-muted-foreground text-xs">Updated</p>
-                    <p className="font-semibold text-lg">0</p>
+                    <p className="font-semibold text-lg">{stats.pull?.updated ?? 0}</p>
                   </div>
                   <div className="rounded-md bg-destructive/10 p-2">
                     <p className="text-muted-foreground text-xs">Deleted</p>
@@ -176,7 +176,7 @@ function SyncStatsView({ result, providerLabel }: { result: PasswordsSyncRespons
                 <span className="font-semibold text-sm">{providerLabel} Import</span>
               </div>
               <div className="text-sm text-muted-foreground">
-                New: {stats.push?.created ?? 0} {(stats.push?.deleted ?? 0) > 0 && `• Deleted: ${stats.push?.deleted ?? 0}`}
+                New: {stats.push?.created ?? 0} {(stats.push?.updated ?? 0) > 0 && `• Updated: ${stats.push?.updated ?? 0}`} {(stats.push?.deleted ?? 0) > 0 && `• Deleted: ${stats.push?.deleted ?? 0}`}
               </div>
             </CollapsibleTrigger>
             <CollapsibleContent>
@@ -188,7 +188,7 @@ function SyncStatsView({ result, providerLabel }: { result: PasswordsSyncRespons
                   </div>
                   <div className="rounded-md bg-muted/50 p-2">
                     <p className="text-muted-foreground text-xs">Updated</p>
-                    <p className="font-semibold text-lg">0</p>
+                    <p className="font-semibold text-lg">{stats.push?.updated ?? 0}</p>
                   </div>
                   <div className="rounded-md bg-destructive/10 p-2">
                     <p className="text-muted-foreground text-xs">Deleted</p>

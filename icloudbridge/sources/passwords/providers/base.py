@@ -60,13 +60,16 @@ class PasswordProviderBase(ABC):
         pass
 
     @abstractmethod
-    async def update_password(self, password_id: str, entry: PasswordEntry) -> None:
+    async def update_password(self, password_id: str, entry: PasswordEntry) -> bool:
         """
         Update an existing password entry.
 
         Args:
             password_id: Provider-specific password identifier
             entry: Updated PasswordEntry
+
+        Returns:
+            True if successful, False otherwise
         """
         pass
 

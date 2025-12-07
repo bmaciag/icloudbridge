@@ -136,6 +136,7 @@ export interface PasswordEntryInfo {
 export interface PasswordPushStats {
   queued: number;
   created: number;
+  updated: number;
   skipped: number;
   failed: number;
   deleted: number;
@@ -148,6 +149,7 @@ export interface PasswordPushStats {
 
 export interface PasswordPullStats {
   new_entries: number;
+  updated: number;
   deleted: number;
   simulate: boolean;
   download_token?: string;

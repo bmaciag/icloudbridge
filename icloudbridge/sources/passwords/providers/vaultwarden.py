@@ -119,17 +119,18 @@ class VaultwardenProvider(PasswordProviderBase):
         )
         return ""
 
-    async def update_password(self, password_id: str, entry: PasswordEntry) -> None:
+    async def update_password(self, password_id: str, entry: PasswordEntry) -> bool:
         """
         Update an existing password entry.
-
-        Note: VaultwardenAPIClient doesn't implement updates, only creates.
 
         Args:
             password_id: Cipher ID
             entry: Updated PasswordEntry
+
+        Returns:
+            True if successful, False otherwise
         """
-        logger.warning("update_password() not implemented for Vaultwarden provider")
+        return await self.client.update_password(password_id, entry)
 
     async def delete_password(self, password_id: str) -> bool:
         """
