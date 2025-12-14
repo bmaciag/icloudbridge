@@ -1,7 +1,7 @@
 """Core synchronization logic for Apple Reminders ↔ CalDAV."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from icloudbridge.sources.reminders.caldav_adapter import (
@@ -16,6 +16,7 @@ from icloudbridge.sources.reminders.eventkit import (
     ReminderRecurrence,
     RemindersAdapter,
 )
+from icloudbridge.utils.datetime_utils import safe_fromtimestamp
 from icloudbridge.utils.db import RemindersDB
 
 logger = logging.getLogger(__name__)
@@ -366,7 +367,10 @@ class RemindersSyncEngine:
         # Process all database mappings
         for local_uuid, mapping in db_mappings.items():
             remote_uid = mapping["remote_uid"]
-            last_sync = datetime.fromtimestamp(mapping["last_sync_timestamp"]).astimezone()
+            last_sync = safe_fromtimestamp(mapping["last_sync_timestamp"])
+            if last_sync is None:
+                last_sync = datetime.now(timezone.utc)
+            last_sync = last_sync.astimezone()
 
             local_reminder = local_by_uuid.get(local_uuid)
             remote_todo = remote_by_uid.get(remote_uid)

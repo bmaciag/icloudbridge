@@ -22,6 +22,8 @@ from EventKit import (
     EKReminder,
 )
 
+from icloudbridge.utils.datetime_utils import safe_fromtimestamp
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,7 +76,7 @@ def normalize_date(dt: Any) -> datetime | None:
 
     # Convert timestamp to datetime
     if timestamp is not None:
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        return safe_fromtimestamp(timestamp, tz=timezone.utc)
 
     # Try isoformat parsing as last resort
     iso_getter = getattr(dt, "isoformat", None)
@@ -342,16 +344,22 @@ class RemindersAdapter:
             # Convert NSDateComponents to datetime
             # This is a simplification - may need better handling
             try:
-                due_date = datetime(
-                    year=dc.year() if dc.year() else 1,
-                    month=dc.month() if dc.month() else 1,
-                    day=dc.day() if dc.day() else 1,
-                    hour=dc.hour() if dc.hour() else 0,
-                    minute=dc.minute() if dc.minute() else 0,
-                    second=dc.second() if dc.second() else 0,
-                    tzinfo=timezone.utc,
-                )
-            except (ValueError, AttributeError) as e:
+                year = dc.year() if dc.year() else 1
+                # Clamp year to valid range to avoid overflow
+                if year < 1 or year > 9999:
+                    logger.warning(f"Invalid year in due date: {year}")
+                    due_date = None
+                else:
+                    due_date = datetime(
+                        year=year,
+                        month=dc.month() if dc.month() else 1,
+                        day=dc.day() if dc.day() else 1,
+                        hour=dc.hour() if dc.hour() else 0,
+                        minute=dc.minute() if dc.minute() else 0,
+                        second=dc.second() if dc.second() else 0,
+                        tzinfo=timezone.utc,
+                    )
+            except (ValueError, AttributeError, OverflowError) as e:
                 logger.warning(f"Could not parse due date: {e}")
                 due_date = None
 

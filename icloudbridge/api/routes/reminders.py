@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, status
 from icloudbridge.api.dependencies import ConfigDep, RemindersDBDep, RemindersSyncEngineDep
 from icloudbridge.api.models import RemindersSyncRequest
 from icloudbridge.utils.credentials import CredentialStore
+from icloudbridge.utils.datetime_utils import safe_fromtimestamp
 from icloudbridge.utils.db import SyncLogsDB
 
 logger = logging.getLogger(__name__)
@@ -339,8 +340,10 @@ async def get_status(reminders_db: RemindersDBDep, config: ConfigDep):
             message = "Sync operation completed"
 
         # Convert timestamps to ISO strings
-        started_at = datetime.fromtimestamp(log["started_at"]).isoformat() if log.get("started_at") else None
-        completed_at = datetime.fromtimestamp(log["completed_at"]).isoformat() if log.get("completed_at") else None
+        started_at = safe_fromtimestamp(log.get("started_at"))
+        started_at = started_at.isoformat() if started_at else None
+        completed_at = safe_fromtimestamp(log.get("completed_at"))
+        completed_at = completed_at.isoformat() if completed_at else None
 
         last_sync = {
             "id": log["id"],
